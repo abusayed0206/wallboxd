@@ -57,6 +57,10 @@ pub struct Config {
     pub poster_count: Option<u32>,
     #[serde(default)]
     pub style: WallpaperStyle,
+    #[serde(default)]
+    pub set_lockscreen: bool,
+    #[serde(default)]
+    pub lockscreen_username: String,
 }
 
 impl Default for Config {
@@ -67,6 +71,8 @@ impl Default for Config {
             autostart: true,
             poster_count: None,
             style: WallpaperStyle::default(),
+            set_lockscreen: false,
+            lockscreen_username: String::new(),
         }
     }
 }

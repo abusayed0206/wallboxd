@@ -3,6 +3,7 @@
 mod applog;
 mod autostart;
 mod config;
+mod progress;
 mod settings_dialog;
 mod tray;
 mod wallpaper;
@@ -15,14 +16,18 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
-    KillTimer, MSG, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage,
+    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 use windows::core::w;
 
 const TIMER_REFRESH: usize = 1;
+const WM_REVERT_CONFIG: u32 = WM_APP + 3;
 const SINGLE_INSTANCE_MUTEX: windows::core::PCWSTR = w!("Local\\WallbSingleInstanceMutex");
 
 thread_local! {
@@ -30,6 +35,10 @@ thread_local! {
 }
 
 fn main() {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
     let Some(_instance_guard) = acquire_single_instance() else {
         return;
     };
@@ -82,6 +91,42 @@ fn spawn_refresh(cfg: Config) {
     std::thread::spawn(move || match wallpaper::refresh(&cfg) {
         Ok(()) => applog::info("wallpaper refreshed"),
         Err(e) => applog::error(&format!("refresh failed: {e}")),
+    });
+}
+
+/// Like `spawn_refresh`, but reports the outcome to the progress dialog via
+/// WM_REFRESH_DONE so the user sees the download/apply happen. If the dialog
+/// was closed before the refresh finished, the PostMessage fails and the
+/// result is logged directly instead.
+fn spawn_refresh_with_progress(cfg: Config, dialog: HWND, hwnd_main: HWND, old_cfg: Option<Config>) {
+    // HWND wraps a raw pointer and isn't Send; pass the pointer value and
+    // rebuild the handle inside the thread.
+    let dialog_raw = dialog.0 as isize;
+    let main_raw = hwnd_main.0 as isize;
+    std::thread::spawn(move || {
+        let dialog = HWND(dialog_raw as *mut _);
+        let main = HWND(main_raw as *mut _);
+        let result = wallpaper::refresh(&cfg);
+        let (wparam, lparam) = match result {
+            Ok(()) => (WPARAM(0), LPARAM(0)),
+            Err(e) => {
+                if let Some(old) = old_cfg {
+                    let old_ptr = Box::into_raw(Box::new(old)) as isize;
+                    let _ = unsafe { PostMessageW(Some(main), WM_REVERT_CONFIG, WPARAM(0), LPARAM(old_ptr)) };
+                }
+                (WPARAM(1), LPARAM(Box::into_raw(Box::new(e)) as isize))
+            }
+        };
+        let posted =
+            unsafe { PostMessageW(Some(dialog), progress::WM_REFRESH_DONE, wparam, lparam) };
+        if posted.is_err() {
+            if wparam.0 != 0 {
+                let err = unsafe { Box::from_raw(lparam.0 as *mut String) };
+                applog::error(&format!("refresh failed: {err}"));
+            } else {
+                applog::info("wallpaper refreshed");
+            }
+        }
     });
 }
 
@@ -145,8 +190,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let cfg = STATE.with(|s| s.borrow().clone());
                     if let Some(cfg) = cfg
                         && !cfg.username.is_empty()
+                        && !progress::is_active()
                     {
-                        spawn_refresh(cfg);
+                        let dialog = progress::show(hwnd);
+                        spawn_refresh_with_progress(cfg, dialog, hwnd, None);
                     }
                     LRESULT(0)
                 }
@@ -166,8 +213,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Err(e) = wallpaper::apply_cached(&new_cfg) {
                             applog::info(&format!("apply_cached after settings change: {e}"));
                         }
-                        if !new_cfg.username.is_empty() {
-                            spawn_refresh(new_cfg.clone());
+                        if !new_cfg.username.is_empty() && !progress::is_active() {
+                            let dialog = progress::show(hwnd);
+                            spawn_refresh_with_progress(new_cfg.clone(), dialog, hwnd, Some(current.clone()));
                         }
 
                         STATE.with(|s| *s.borrow_mut() = Some(new_cfg));
@@ -187,9 +235,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cfg = STATE.with(|s| s.borrow().clone());
                 if let Some(cfg) = cfg
                     && !cfg.username.is_empty()
+                    && !progress::is_active()
                 {
                     spawn_refresh(cfg);
                 }
+            }
+            LRESULT(0)
+        }
+        WM_REVERT_CONFIG => {
+            let old_cfg = unsafe { Box::from_raw(lparam.0 as *mut Config) };
+            if let Err(e) = old_cfg.save() {
+                applog::error(&format!("failed to revert config: {e}"));
+            }
+            autostart::set(old_cfg.autostart);
+            STATE.with(|s| *s.borrow_mut() = Some(*old_cfg.clone()));
+            tray::set_tooltip(hwnd, &tooltip_for(&old_cfg));
+            start_timer(hwnd, old_cfg.interval_minutes);
+            if let Err(e) = wallpaper::apply_cached(&old_cfg) {
+                applog::error(&format!("failed to re-apply old wallpaper on revert: {e}"));
             }
             LRESULT(0)
         }

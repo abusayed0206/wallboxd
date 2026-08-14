@@ -32,7 +32,8 @@ Windows-only Rust system-tray app that sets the desktop wallpaper to a Letterbox
 - `main.rs` — hidden, never-shown message-only window that owns the tray icon, refresh timer, and settings dialog. Single-instance via named mutex `Local\WallbSingleInstanceMutex` (second launch exits silently). Refresh runs on a spawned thread; current `Config` lives in a `thread_local!`.
 - `tray.rs` — tray icon + popup menu (Refresh now / Settings... / Exit). Uses stock `IDI_APPLICATION` icon — no `.ico` resource is embedded.
 - `settings_dialog.rs` — modal Win32 dialog; state via `thread_local!` slots (safe because it's always modal). Interval parses with min 5, invalid input → 60. `poster_count` is hardcoded `None` from the dialog.
-- `wallpaper.rs` — fetches the poster wall, writes `wallpaper.jpg`, applies via `SystemParametersInfoW(SPI_SETDESKWALLPAPER)`. `reqwest` blocking + rustls (no native-tls), 20s timeout.
+- `progress.rs` — non-modal progress dialog (animated progress bar via a cycling `PBM_SETPOS` timer) shown only for manual refreshes (Refresh now / Settings OK). The refresh thread posts `WM_REFRESH_DONE` (wParam≠0 = failure, lParam = boxed error `String`) to it; failures keep the dialog open with the error + OK button. `progress::is_active()` guards against overlapping refreshes; timer auto-refreshes stay silent.
+- `wallpaper.rs` — fetches the poster wall, writes `wallpaper.jpg`, applies via `SystemParametersInfoW(SPI_SETDESKWALLPAPER)`. `reqwest` blocking + rustls (no native-tls). Resilient by design: 60s timeout, up to 3 attempts with 5s backoff on transient failures (5xx/timeouts/connection), because the API has a cold start; 4xx errors fail immediately.
 - `config.rs` — serde JSON config; `WallpaperStyle` maps to Windows registry values.
 - `autostart.rs` — `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, exe path written quoted.
 - `applog.rs` — append-only timestamped log.

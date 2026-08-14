@@ -14,6 +14,8 @@ desktop wallpaper — sized to your primary monitor.
 - Configurable refresh interval (minimum 5 minutes)
 - Wallpaper style: Fill, Fit, Stretch, Center, Tile, Span
 - Optional start-with-Windows autostart
+- Progress dialog with animated progress bar while a manual refresh runs
+  (failures show the error in the dialog); timer auto-refreshes stay silent
 - Single instance — a second launch exits silently
 - Offline-friendly: the cached wallpaper is re-applied at startup, and a failed
   refresh leaves your current wallpaper untouched
