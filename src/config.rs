@@ -1,20 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WallpaperStyle {
+    #[default]
     Fill,
     Fit,
     Stretch,
     Center,
     Tile,
     Span,
-}
-
-impl Default for WallpaperStyle {
-    fn default() -> Self {
-        WallpaperStyle::Fill
-    }
 }
 
 impl WallpaperStyle {

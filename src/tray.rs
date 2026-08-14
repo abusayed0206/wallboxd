@@ -4,7 +4,7 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HICON, HMENU, IDI_APPLICATION, LoadIconW, MF_STRING,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HICON, IDI_APPLICATION, LoadIconW, MF_STRING,
     SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
 };
 use windows::core::PCWSTR;
@@ -31,11 +31,12 @@ fn wide_tip(text: &str) -> [u16; 128] {
 }
 
 fn base_nid(hwnd: HWND) -> NOTIFYICONDATAW {
-    let mut nid = NOTIFYICONDATAW::default();
-    nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    nid.hWnd = hwnd;
-    nid.uID = TRAY_ID;
-    nid
+    NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_ID,
+        ..Default::default()
+    }
 }
 
 pub fn add(hwnd: HWND, tooltip: &str) {

@@ -86,7 +86,7 @@ fn spawn_refresh(cfg: Config) {
 }
 
 fn start_timer(hwnd: HWND, interval_minutes: u32) {
-    let millis = interval_minutes.max(1) as u32 * 60_000;
+    let millis = interval_minutes.max(1) * 60_000;
     unsafe {
         SetTimer(Some(hwnd), TIMER_REFRESH, millis, None);
     }
@@ -133,7 +133,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let mouse_msg = lparam.0 as u32;
             if mouse_msg == WM_RBUTTONUP || mouse_msg == WM_LBUTTONUP {
                 let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
+                let _ = unsafe { GetCursorPos(&mut pt) };
                 tray::show_menu(hwnd, pt.x, pt.y);
             }
             LRESULT(0)
@@ -143,10 +143,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             match id as u32 {
                 tray::ID_REFRESH => {
                     let cfg = STATE.with(|s| s.borrow().clone());
-                    if let Some(cfg) = cfg {
-                        if !cfg.username.is_empty() {
-                            spawn_refresh(cfg);
-                        }
+                    if let Some(cfg) = cfg
+                        && !cfg.username.is_empty()
+                    {
+                        spawn_refresh(cfg);
                     }
                     LRESULT(0)
                 }
@@ -158,7 +158,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         autostart::set(new_cfg.autostart);
 
-                        let _ = KillTimer(Some(hwnd), TIMER_REFRESH);
+                        let _ = unsafe { KillTimer(Some(hwnd), TIMER_REFRESH) };
                         start_timer(hwnd, new_cfg.interval_minutes);
 
                         tray::set_tooltip(hwnd, &tooltip_for(&new_cfg));
@@ -176,29 +176,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 tray::ID_EXIT => {
                     tray::remove(hwnd);
-                    PostQuitMessage(0);
+                    unsafe { PostQuitMessage(0) };
                     LRESULT(0)
                 }
-                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+                _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
             }
         }
         WM_TIMER => {
             if wparam.0 == TIMER_REFRESH {
                 let cfg = STATE.with(|s| s.borrow().clone());
-                if let Some(cfg) = cfg {
-                    if !cfg.username.is_empty() {
-                        spawn_refresh(cfg);
-                    }
+                if let Some(cfg) = cfg
+                    && !cfg.username.is_empty()
+                {
+                    spawn_refresh(cfg);
                 }
             }
             LRESULT(0)
         }
         WM_DESTROY => {
             tray::remove(hwnd);
-            PostQuitMessage(0);
+            unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 

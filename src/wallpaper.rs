@@ -102,6 +102,9 @@ fn set_style_registry(style: WallpaperStyle) -> Result<(), String> {
             KEY_WRITE,
             &mut hkey,
         )
+        // RegOpenKeyExW/RegSetValueExW return a raw WIN32_ERROR; .ok()
+        // converts it to Result<(), Error>.
+        .ok()
         .map_err(|e| e.to_string())?;
 
         let mut style_wide: Vec<u16> = style_val.encode_utf16().chain(std::iter::once(0)).collect();
@@ -115,8 +118,8 @@ fn set_style_registry(style: WallpaperStyle) -> Result<(), String> {
         let r2 = RegSetValueExW(hkey, w!("TileWallpaper"), None, REG_SZ, Some(tile_bytes));
 
         let _ = RegCloseKey(hkey);
-        r1.map_err(|e| e.to_string())?;
-        r2.map_err(|e| e.to_string())?;
+        r1.ok().map_err(|e| e.to_string())?;
+        r2.ok().map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -10,7 +10,10 @@ const VALUE_NAME: PCWSTR = w!("wallb");
 
 fn open_run_key() -> Option<HKEY> {
     let mut hkey = HKEY::default();
+    // RegOpenKeyExW returns a raw WIN32_ERROR, not a Result: .ok() turns it
+    // into Result<(), Error>, and the second .ok() turns that into Option<()>.
     unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_WRITE, &mut hkey) }
+        .ok()
         .ok()
         .map(|_| hkey)
 }

@@ -2,12 +2,14 @@ use crate::config::{Config, WallpaperStyle};
 use std::cell::RefCell;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BST_CHECKED, BST_UNCHECKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL,
-    CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, EnableWindow, GetMessageW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
-    MSG, RegisterClassW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
+    GetWindowTextLengthW, GetWindowTextW, IsWindow, MSG, RegisterClassW, SW_SHOW, SendMessageW,
+    ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND, WM_DESTROY, WNDCLASSW, WS_CAPTION,
+    WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -29,7 +31,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_COMMAND => {
             let id = wparam.0 & 0xFFFF;
             if id == ID_BTN_OK {
-                let cfg = CTRLS.with(|c| {
+                let cfg = CTRLS.with(|c| unsafe {
                     let (u, style, i, a) = c.borrow().unwrap();
                     let username = get_text(u);
                     let interval: u32 = get_text(i).trim().parse().unwrap_or(60).max(5);
@@ -49,21 +51,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 });
                 RESULT.with(|r| *r.borrow_mut() = Some(cfg));
-                let _ = DestroyWindow(hwnd);
+                let _ = unsafe { DestroyWindow(hwnd) };
                 LRESULT(0)
             } else if id == ID_BTN_CANCEL {
-                let _ = DestroyWindow(hwnd);
+                let _ = unsafe { DestroyWindow(hwnd) };
                 LRESULT(0)
             } else {
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(hwnd);
+            let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
         }
         WM_DESTROY => LRESULT(0),
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
@@ -136,7 +138,7 @@ fn edit(
 ) -> HWND {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
-        let hwnd = CreateWindowExW(
+        CreateWindowExW(
             windows::Win32::UI::WindowsAndMessaging::WS_EX_CLIENTEDGE,
             w!("EDIT"),
             PCWSTR::from_raw(wide.as_ptr()),
@@ -150,8 +152,7 @@ fn edit(
             Some(instance.into()),
             None,
         )
-        .unwrap();
-        hwnd
+        .unwrap()
     }
 }
 
@@ -161,11 +162,9 @@ fn button(
     text: PCWSTR,
     style: u32,
     id: usize,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+    rect: (i32, i32, i32, i32),
 ) -> HWND {
+    let (x, y, w, h) = rect;
     unsafe {
         CreateWindowExW(
             Default::default(),
@@ -201,7 +200,7 @@ fn combo(
             Default::default(),
             w!("COMBOBOX"),
             PCWSTR::null(),
-            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(CBS_DROPDOWNLIST.0)
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(CBS_DROPDOWNLIST as u32)
                 | WS_CHILD
                 | WS_VISIBLE
                 | WS_TABSTOP,
@@ -305,12 +304,9 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             dlg,
             instance,
             w!("Start with Windows"),
-            windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX.0,
+            windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
             0,
-            12,
-            174,
-            300,
-            22,
+            (12, 174, 300, 22),
         );
         if current.autostart {
             let _ = SendMessageW(
@@ -328,17 +324,14 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             );
         }
 
-        button(dlg, instance, w!("OK"), 0, ID_BTN_OK, 90, 210, 80, 28);
+        button(dlg, instance, w!("OK"), 0, ID_BTN_OK, (90, 210, 80, 28));
         button(
             dlg,
             instance,
             w!("Cancel"),
             0,
             ID_BTN_CANCEL,
-            180,
-            210,
-            80,
-            28,
+            (180, 210, 80, 28),
         );
 
         CTRLS.with(|c| {
