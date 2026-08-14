@@ -10,7 +10,11 @@ fn log_path() -> std::path::PathBuf {
 
 fn write_line(level: &str, msg: &str) {
     let _ = std::fs::create_dir_all(crate::config::data_dir());
-    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path()) else {
+    let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+    else {
         return;
     };
     let secs = SystemTime::now()

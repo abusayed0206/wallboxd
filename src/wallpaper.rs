@@ -2,14 +2,14 @@ use crate::config::{Config, WallpaperStyle};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use windows::core::w;
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_SZ, RegCloseKey, RegOpenKeyExW, RegSetValueExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SystemParametersInfoW, SM_CXSCREEN, SM_CYSCREEN, SPIF_SENDCHANGE,
-    SPIF_UPDATEINIFILE, SPI_SETDESKWALLPAPER,
+    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN, SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE,
+    SPIF_UPDATEINIFILE, SystemParametersInfoW,
 };
+use windows::core::w;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 

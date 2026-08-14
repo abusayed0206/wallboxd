@@ -1,16 +1,15 @@
 use crate::config::{Config, WallpaperStyle};
 use std::cell::RefCell;
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnableWindow,
-    GetWindowTextLengthW, GetWindowTextW, IsWindow, RegisterClassW, SendMessageW, ShowWindow,
-    TranslateMessage, BM_GETCHECK, BM_SETCHECK, BST_CHECKED, BST_UNCHECKED, CB_ADDSTRING,
-    CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CW_USEDEFAULT, GetMessageW, MSG, SW_SHOW,
-    WM_CLOSE, WM_COMMAND, WM_DESTROY, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BST_CHECKED, BST_UNCHECKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL,
+    CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, EnableWindow, GetMessageW, GetWindowTextLengthW, GetWindowTextW, IsWindow,
+    MSG, RegisterClassW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND,
+    WM_DESTROY, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
+use windows::core::{PCWSTR, w};
 
 const ID_BTN_OK: usize = 2004;
 const ID_BTN_CANCEL: usize = 2005;
@@ -34,13 +33,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let (u, style, i, a) = c.borrow().unwrap();
                     let username = get_text(u);
                     let interval: u32 = get_text(i).trim().parse().unwrap_or(60).max(5);
-                    let autostart = SendMessageW(a, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+                    let autostart =
+                        SendMessageW(a, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
                     let sel = SendMessageW(style, CB_GETCURSEL, None, None).0 as i32;
                     let style = usize::try_from(sel)
                         .ok()
                         .and_then(|i| WallpaperStyle::ALL.get(i).copied())
                         .unwrap_or_default();
-                    Config { username, interval_minutes: interval, autostart, poster_count: None, style }
+                    Config {
+                        username,
+                        interval_minutes: interval,
+                        autostart,
+                        poster_count: None,
+                        style,
+                    }
                 });
                 RESULT.with(|r| *r.borrow_mut() = Some(cfg));
                 let _ = DestroyWindow(hwnd);
@@ -92,14 +98,25 @@ fn register_class_once() {
     });
 }
 
-fn label(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: PCWSTR, x: i32, y: i32, w: i32, h: i32) {
+fn label(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    text: PCWSTR,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
     unsafe {
         let _ = CreateWindowExW(
             Default::default(),
             w!("STATIC"),
             text,
             WS_CHILD | WS_VISIBLE,
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             Some(parent),
             None,
             Some(instance.into()),
@@ -108,7 +125,15 @@ fn label(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: PCWS
     }
 }
 
-fn edit(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: &str, x: i32, y: i32, w: i32, h: i32) -> HWND {
+fn edit(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    text: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let hwnd = CreateWindowExW(
@@ -116,7 +141,10 @@ fn edit(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: &str,
             w!("EDIT"),
             PCWSTR::from_raw(wide.as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             Some(parent),
             None,
             Some(instance.into()),
@@ -127,14 +155,30 @@ fn edit(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: &str,
     }
 }
 
-fn button(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: PCWSTR, style: u32, id: usize, x: i32, y: i32, w: i32, h: i32) -> HWND {
+fn button(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    text: PCWSTR,
+    style: u32,
+    id: usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
     unsafe {
         CreateWindowExW(
             Default::default(),
             w!("BUTTON"),
             text,
-            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(style) | WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            x, y, w, h,
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(style)
+                | WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP,
+            x,
+            y,
+            w,
+            h,
             Some(parent),
             Some(windows::Win32::UI::WindowsAndMessaging::HMENU(id as *mut _)),
             Some(instance.into()),
@@ -144,7 +188,14 @@ fn button(parent: HWND, instance: windows::Win32::Foundation::HMODULE, text: PCW
     }
 }
 
-fn combo(parent: HWND, instance: windows::Win32::Foundation::HMODULE, x: i32, y: i32, w: i32, h: i32) -> HWND {
+fn combo(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
     unsafe {
         CreateWindowExW(
             Default::default(),
@@ -154,7 +205,10 @@ fn combo(parent: HWND, instance: windows::Win32::Foundation::HMODULE, x: i32, y:
                 | WS_CHILD
                 | WS_VISIBLE
                 | WS_TABSTOP,
-            x, y, w, h,
+            x,
+            y,
+            w,
+            h,
             Some(parent),
             None,
             Some(instance.into()),
@@ -164,14 +218,34 @@ fn combo(parent: HWND, instance: windows::Win32::Foundation::HMODULE, x: i32, y:
     }
 }
 
-fn style_combo(parent: HWND, instance: windows::Win32::Foundation::HMODULE, current: WallpaperStyle, x: i32, y: i32, w: i32, h: i32) -> HWND {
+fn style_combo(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    current: WallpaperStyle,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
     let hwnd = combo(parent, instance, x, y, w, h);
     unsafe {
         for style in WallpaperStyle::ALL {
-            let wide: Vec<u16> = style.label().encode_utf16().chain(std::iter::once(0)).collect();
-            SendMessageW(hwnd, CB_ADDSTRING, None, Some(LPARAM(wide.as_ptr() as isize)));
+            let wide: Vec<u16> = style
+                .label()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            SendMessageW(
+                hwnd,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(wide.as_ptr() as isize)),
+            );
         }
-        let idx = WallpaperStyle::ALL.iter().position(|s| *s == current).unwrap_or(0);
+        let idx = WallpaperStyle::ALL
+            .iter()
+            .position(|s| *s == current)
+            .unwrap_or(0);
         SendMessageW(hwnd, CB_SETCURSEL, Some(WPARAM(idx)), None);
     }
     hwnd
@@ -191,7 +265,10 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             class_name(),
             w!("wallb settings"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-            CW_USEDEFAULT, CW_USEDEFAULT, 340, 320,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            340,
+            320,
             Some(owner),
             None,
             Some(instance.into()),
@@ -205,24 +282,68 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         label(dlg, instance, w!("Wallpaper style:"), 12, 66, 300, 18);
         let hwnd_style = style_combo(dlg, instance, current.style, 12, 86, 300, 24);
 
-        label(dlg, instance, w!("Refresh interval (minutes, min 5):"), 12, 120, 300, 18);
-        let hwnd_interval = edit(dlg, instance, &current.interval_minutes.to_string(), 12, 140, 300, 24);
+        label(
+            dlg,
+            instance,
+            w!("Refresh interval (minutes, min 5):"),
+            12,
+            120,
+            300,
+            18,
+        );
+        let hwnd_interval = edit(
+            dlg,
+            instance,
+            &current.interval_minutes.to_string(),
+            12,
+            140,
+            300,
+            24,
+        );
 
         let hwnd_autostart = button(
-            dlg, instance, w!("Start with Windows"),
+            dlg,
+            instance,
+            w!("Start with Windows"),
             windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX.0,
-            0, 12, 174, 300, 22,
+            0,
+            12,
+            174,
+            300,
+            22,
         );
         if current.autostart {
-            let _ = SendMessageW(hwnd_autostart, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), None);
+            let _ = SendMessageW(
+                hwnd_autostart,
+                BM_SETCHECK,
+                Some(WPARAM(BST_CHECKED.0 as usize)),
+                None,
+            );
         } else {
-            let _ = SendMessageW(hwnd_autostart, BM_SETCHECK, Some(WPARAM(BST_UNCHECKED.0 as usize)), None);
+            let _ = SendMessageW(
+                hwnd_autostart,
+                BM_SETCHECK,
+                Some(WPARAM(BST_UNCHECKED.0 as usize)),
+                None,
+            );
         }
 
         button(dlg, instance, w!("OK"), 0, ID_BTN_OK, 90, 210, 80, 28);
-        button(dlg, instance, w!("Cancel"), 0, ID_BTN_CANCEL, 180, 210, 80, 28);
+        button(
+            dlg,
+            instance,
+            w!("Cancel"),
+            0,
+            ID_BTN_CANCEL,
+            180,
+            210,
+            80,
+            28,
+        );
 
-        CTRLS.with(|c| *c.borrow_mut() = Some((hwnd_user, hwnd_style, hwnd_interval, hwnd_autostart)));
+        CTRLS.with(|c| {
+            *c.borrow_mut() = Some((hwnd_user, hwnd_style, hwnd_interval, hwnd_autostart))
+        });
 
         let _ = EnableWindow(owner, false);
         let _ = ShowWindow(dlg, SW_SHOW);

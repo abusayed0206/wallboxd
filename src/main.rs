@@ -9,18 +9,18 @@ mod wallpaper;
 
 use config::Config;
 use std::cell::RefCell;
-use windows::core::w;
 use windows::Win32::Foundation::{
-    GetLastError, SetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT,
+    ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, SetLastError,
     WIN32_ERROR, WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW, KillTimer,
-    PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, CW_USEDEFAULT, MSG,
-    WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetCursorPos, GetMessageW,
+    KillTimer, MSG, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
+use windows::core::w;
 
 const TIMER_REFRESH: usize = 1;
 const SINGLE_INSTANCE_MUTEX: windows::core::PCWSTR = w!("Local\\WallbSingleInstanceMutex");

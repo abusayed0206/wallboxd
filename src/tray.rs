@@ -1,13 +1,13 @@
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, LoadIconW, SetForegroundWindow, TrackPopupMenu,
-    HICON, HMENU, IDI_APPLICATION, MF_STRING, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, HICON, HMENU, IDI_APPLICATION, LoadIconW, MF_STRING,
+    SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
 };
+use windows::core::PCWSTR;
 
 pub const WM_TRAYICON: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
 pub const TRAY_ID: u32 = 1;
@@ -68,14 +68,37 @@ pub fn remove(hwnd: HWND) {
 pub fn show_menu(hwnd: HWND, x: i32, y: i32) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let _ = AppendMenuW(menu, MF_STRING, ID_REFRESH as usize, PCWSTR::from_raw(w("Refresh now").as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS as usize, PCWSTR::from_raw(w("Settings...").as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, ID_EXIT as usize, PCWSTR::from_raw(w("Exit").as_ptr()));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_REFRESH as usize,
+            PCWSTR::from_raw(w("Refresh now").as_ptr()),
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_SETTINGS as usize,
+            PCWSTR::from_raw(w("Settings...").as_ptr()),
+        );
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_EXIT as usize,
+            PCWSTR::from_raw(w("Exit").as_ptr()),
+        );
 
         // Popup menus need the owner window in the foreground or they won't
         // dismiss on outside click; standard tray-icon dance.
         let _ = SetForegroundWindow(hwnd);
-        let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, x, y, Some(0), hwnd, None);
+        let _ = TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+            x,
+            y,
+            Some(0),
+            hwnd,
+            None,
+        );
         let _ = DestroyMenu(menu);
     }
 }
