@@ -1,0 +1,35 @@
+{
+    "version":  1,
+    "skills":  {
+                   "rust-best-practices":  {
+                                               "computedHash":  "854eb5500c962fd56ff1b94e398e3cc30a192b01753d98fe685150fdcc9f02ef",
+                                               "source":  "apollographql/skills",
+                                               "sourceType":  "github",
+                                               "skillPath":  "skills/rust-best-practices/SKILL.md"
+                                           },
+                   "rust-testing":  {
+                                        "computedHash":  "02a9a40dcc42dd21d14730d29b13ee0a8b274694360585dc0fadb2602eb56ddf",
+                                        "source":  "affaan-m/ecc",
+                                        "sourceType":  "github",
+                                        "skillPath":  "skills/rust-testing/SKILL.md"
+                                    },
+                   "rust-async-patterns":  {
+                                               "computedHash":  "5b15e03b5e0645423abb1c916a0987b348fc4d41927c81ee12cf28db6d4663aa",
+                                               "source":  "wshobson/agents",
+                                               "sourceType":  "github",
+                                               "skillPath":  "plugins/systems-programming/skills/rust-async-patterns/SKILL.md"
+                                           },
+                   "rust-review":  {
+                                       "computedHash":  "66f8eb50336063587f8d295b81627f7ea94d81fbc6bf6349a175998b643b2529",
+                                       "source":  "trailofbits/skills",
+                                       "sourceType":  "github",
+                                       "skillPath":  "plugins/rust-review/skills/rust-review/SKILL.md"
+                                   },
+                   "rust-patterns":  {
+                                         "computedHash":  "51379df2bd92a482309e109e5a210210842594f660cceeb2d68d18e995108edf",
+                                         "source":  "affaan-m/ecc",
+                                         "sourceType":  "github",
+                                         "skillPath":  "skills/rust-patterns/SKILL.md"
+                                     }
+               }
+}
