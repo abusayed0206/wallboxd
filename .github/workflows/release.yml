@@ -43,10 +43,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}"
-          $stageDir = "dist/wallb-$version-windows-x64"
+          $stageDir = "dist/Wallboxd-$version-windows-x64"
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-          Copy-Item target/release/wallb.exe -Destination $stageDir
-          Compress-Archive -Path "$stageDir/*" -DestinationPath "dist/wallb-$version-windows-x64.zip"
+          Copy-Item target/release/Wallboxd.exe -Destination $stageDir
+          Compress-Archive -Path "$stageDir/*" -DestinationPath "dist/Wallboxd-$version-windows-x64.zip"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

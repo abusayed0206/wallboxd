@@ -79,11 +79,38 @@ impl Default for Config {
 
 pub fn data_dir() -> PathBuf {
     let base = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA not set");
+    PathBuf::from(base).join("Wallboxd")
+}
+
+/// Pre-rename data directory (the app was called "wallb" before adopting
+/// the "Wallboxd" Store identity). Only ever read from, never written to.
+fn legacy_data_dir() -> PathBuf {
+    let base = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA not set");
     PathBuf::from(base).join("wallb")
 }
 
 fn config_path() -> PathBuf {
     data_dir().join("config.json")
+}
+
+/// One-time carry-over from the pre-rename `%LOCALAPPDATA%\wallb` directory,
+/// so upgrading from "wallb" to "Wallboxd" doesn't drop the user's username/
+/// settings or force a re-download of the current wallpaper before the first
+/// refresh. Only runs when the new location has no config yet; the old
+/// directory is left untouched (never deleted) since it may still belong to
+/// an old install the user hasn't uninstalled.
+pub fn migrate_from_legacy() {
+    if config_path().exists() {
+        return;
+    }
+    let legacy = legacy_data_dir();
+    if !legacy.join("config.json").exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(data_dir());
+    for file in ["config.json", "wallpaper.jpg", "lockscreen.jpg"] {
+        let _ = std::fs::copy(legacy.join(file), data_dir().join(file));
+    }
 }
 
 impl Config {

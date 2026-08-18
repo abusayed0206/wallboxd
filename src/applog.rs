@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// A background app with no console has nowhere else for diagnostics to go,
 /// so failures get appended here instead of silently vanishing.
 fn log_path() -> std::path::PathBuf {
-    crate::config::data_dir().join("wallb.log")
+    crate::config::data_dir().join("Wallboxd.log")
 }
 
 fn write_line(level: &str, msg: &str) {

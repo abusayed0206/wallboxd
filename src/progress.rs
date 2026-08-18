@@ -4,7 +4,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_GETPOS, PBM_SETPOS,
-    PROGRESS_CLASS,
+    PBM_SETRANGE32, PROGRESS_CLASS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, HMENU,
@@ -20,6 +20,12 @@ use windows::core::{PCWSTR, w};
 /// boxed error String that the dialog owns.
 pub const WM_REFRESH_DONE: u32 = WM_APP + 2;
 
+/// Posted (possibly many times, from any of the poster-fetch worker threads —
+/// see `wallgen::fetch_all_posters`) as poster tiles finish downloading.
+/// wParam = tiles done so far, lParam = total tiles. Switches the bar from
+/// its indeterminate startup animation to a real determinate progress bar.
+pub const WM_PROGRESS_UPDATE: u32 = WM_APP + 6;
+
 const TIMER_ANIMATE: usize = 1;
 const ID_BTN_OK: usize = 3001;
 const PROGRESS_STEP: i32 = 5;
@@ -28,6 +34,13 @@ thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
     // (progress bar, status label, OK button)
     static CTRLS: RefCell<Option<(HWND, HWND, HWND)>> = const { RefCell::new(None) };
+    // Set once the first real WM_PROGRESS_UPDATE arrives, so the indeterminate
+    // animation timer stops fighting over the bar's position with real data.
+    static REAL_PROGRESS: Cell<bool> = const { Cell::new(false) };
+    // Highest (done, total) seen so far — guards against the bar visibly
+    // jumping backward if updates from different worker threads arrive out
+    // of order.
+    static LAST_PROGRESS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
 }
 
 pub fn is_active() -> bool {
@@ -36,8 +49,11 @@ pub fn is_active() -> bool {
 
 fn get_font() -> WPARAM {
     use std::sync::Once;
-    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETNONCLIENTMETRICS, NONCLIENTMETRICSW, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
     use windows::Win32::Graphics::Gdi::CreateFontIndirectW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        SystemParametersInfoW,
+    };
     static mut FONT_WPARAM: usize = 0;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| unsafe {
@@ -63,12 +79,14 @@ fn get_font() -> WPARAM {
 pub fn show(owner: HWND) -> HWND {
     register_class_once();
     ACTIVE.set(true);
+    REAL_PROGRESS.with(|r| r.set(false));
+    LAST_PROGRESS.with(|p| p.set((0, 0)));
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
         let dlg = CreateWindowExW(
             Default::default(),
             class_name(),
-            w!("wallb"),
+            w!("Wallboxd"),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -156,7 +174,7 @@ pub fn show(owner: HWND) -> HWND {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER => {
-            if wparam.0 == TIMER_ANIMATE {
+            if wparam.0 == TIMER_ANIMATE && !REAL_PROGRESS.with(|r| r.get()) {
                 CTRLS.with(|c| unsafe {
                     if let Some((bar, _, _)) = c.borrow().as_ref() {
                         let pos = SendMessageW(*bar, PBM_GETPOS, None, None).0 as i32;
@@ -166,6 +184,39 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             pos + PROGRESS_STEP
                         };
                         let _ = SendMessageW(*bar, PBM_SETPOS, Some(WPARAM(next as usize)), None);
+                    }
+                });
+            }
+            LRESULT(0)
+        }
+        WM_PROGRESS_UPDATE => {
+            let done = wparam.0 as u32;
+            let total = (lparam.0 as u32).max(1);
+            let is_newer = LAST_PROGRESS.with(|p| {
+                let (last_done, last_total) = p.get();
+                if total != last_total || done > last_done {
+                    p.set((done, total));
+                    true
+                } else {
+                    false
+                }
+            });
+            if is_newer {
+                REAL_PROGRESS.with(|r| r.set(true));
+                CTRLS.with(|c| unsafe {
+                    if let Some((bar, label, _)) = c.borrow().as_ref() {
+                        let _ = SendMessageW(
+                            *bar,
+                            PBM_SETRANGE32,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(total as isize)),
+                        );
+                        let _ = SendMessageW(*bar, PBM_SETPOS, Some(WPARAM(done as usize)), None);
+
+                        let text = format!("Fetching posters ({done}/{total})...");
+                        let wide: Vec<u16> =
+                            text.encode_utf16().chain(std::iter::once(0)).collect();
+                        let _ = SetWindowTextW(*label, PCWSTR::from_raw(wide.as_ptr()));
                     }
                 });
             }
@@ -217,7 +268,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 }
 
 fn class_name() -> PCWSTR {
-    w!("WallbProgressWindow")
+    w!("WallboxdProgressWindow")
 }
 
 fn register_class_once() {

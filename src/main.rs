@@ -3,9 +3,13 @@
 mod applog;
 mod autostart;
 mod config;
+mod letterboxd;
+mod poster_layout;
 mod progress;
 mod settings_dialog;
 mod tray;
+mod wallerror;
+mod wallgen;
 mod wallpaper;
 
 use config::Config;
@@ -28,7 +32,7 @@ use windows::core::w;
 
 const TIMER_REFRESH: usize = 1;
 const WM_REVERT_CONFIG: u32 = WM_APP + 3;
-const SINGLE_INSTANCE_MUTEX: windows::core::PCWSTR = w!("Local\\WallbSingleInstanceMutex");
+const SINGLE_INSTANCE_MUTEX: windows::core::PCWSTR = w!("Local\\WallboxdSingleInstanceMutex");
 
 thread_local! {
     static STATE: RefCell<Option<Config>> = const { RefCell::new(None) };
@@ -43,6 +47,7 @@ fn main() {
         return;
     };
 
+    config::migrate_from_legacy();
     let _ = std::fs::create_dir_all(config::data_dir());
     let cfg = Config::load();
 
@@ -81,14 +86,14 @@ fn acquire_single_instance() -> Option<HANDLE> {
 
 fn tooltip_for(cfg: &Config) -> String {
     if cfg.username.is_empty() {
-        "wallb - not configured".to_string()
+        "Wallboxd - not configured".to_string()
     } else {
-        format!("wallb - {}", cfg.username)
+        format!("Wallboxd - {}", cfg.username)
     }
 }
 
 fn spawn_refresh(cfg: Config) {
-    std::thread::spawn(move || match wallpaper::refresh(&cfg) {
+    std::thread::spawn(move || match wallpaper::refresh(&cfg, &|_, _| {}) {
         Ok(()) => applog::info("wallpaper refreshed"),
         Err(e) => applog::error(&format!("refresh failed: {e}")),
     });
@@ -98,7 +103,12 @@ fn spawn_refresh(cfg: Config) {
 /// WM_REFRESH_DONE so the user sees the download/apply happen. If the dialog
 /// was closed before the refresh finished, the PostMessage fails and the
 /// result is logged directly instead.
-fn spawn_refresh_with_progress(cfg: Config, dialog: HWND, hwnd_main: HWND, old_cfg: Option<Config>) {
+fn spawn_refresh_with_progress(
+    cfg: Config,
+    dialog: HWND,
+    hwnd_main: HWND,
+    old_cfg: Option<Config>,
+) {
     // HWND wraps a raw pointer and isn't Send; pass the pointer value and
     // rebuild the handle inside the thread.
     let dialog_raw = dialog.0 as isize;
@@ -106,13 +116,26 @@ fn spawn_refresh_with_progress(cfg: Config, dialog: HWND, hwnd_main: HWND, old_c
     std::thread::spawn(move || {
         let dialog = HWND(dialog_raw as *mut _);
         let main = HWND(main_raw as *mut _);
-        let result = wallpaper::refresh(&cfg);
+        let on_progress = move |done: u32, total: u32| {
+            let dialog = HWND(dialog_raw as *mut _);
+            let _ = unsafe {
+                PostMessageW(
+                    Some(dialog),
+                    progress::WM_PROGRESS_UPDATE,
+                    WPARAM(done as usize),
+                    LPARAM(total as isize),
+                )
+            };
+        };
+        let result = wallpaper::refresh(&cfg, &on_progress);
         let (wparam, lparam) = match result {
             Ok(()) => (WPARAM(0), LPARAM(0)),
             Err(e) => {
                 if let Some(old) = old_cfg {
                     let old_ptr = Box::into_raw(Box::new(old)) as isize;
-                    let _ = unsafe { PostMessageW(Some(main), WM_REVERT_CONFIG, WPARAM(0), LPARAM(old_ptr)) };
+                    let _ = unsafe {
+                        PostMessageW(Some(main), WM_REVERT_CONFIG, WPARAM(0), LPARAM(old_ptr))
+                    };
                 }
                 (WPARAM(1), LPARAM(Box::into_raw(Box::new(e)) as isize))
             }
@@ -138,7 +161,7 @@ fn start_timer(hwnd: HWND, interval_minutes: u32) {
 }
 
 fn class_name() -> windows::core::PCWSTR {
-    w!("WallbMainWindow")
+    w!("WallboxdMainWindow")
 }
 
 fn create_main_window() -> HWND {
@@ -157,7 +180,7 @@ fn create_main_window() -> HWND {
         CreateWindowExW(
             Default::default(),
             class_name(),
-            w!("wallb"),
+            w!("Wallboxd"),
             WS_OVERLAPPED,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -215,7 +238,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         if !new_cfg.username.is_empty() && !progress::is_active() {
                             let dialog = progress::show(hwnd);
-                            spawn_refresh_with_progress(new_cfg.clone(), dialog, hwnd, Some(current.clone()));
+                            spawn_refresh_with_progress(
+                                new_cfg.clone(),
+                                dialog,
+                                hwnd,
+                                Some(current.clone()),
+                            );
                         }
 
                         STATE.with(|s| *s.borrow_mut() = Some(new_cfg));

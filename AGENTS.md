@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Windows-only Rust system-tray app that sets the desktop wallpaper to a Letterboxd user's poster wall, fetched from the posterboi API (`https://lb.sayed.app`). User-facing docs live in `README.md`; this file is agent guidance.
+Windows-only Rust system-tray app, **product name "Wallboxd"** (crate/package name `wallboxd`, binary `Wallboxd.exe` — renamed from "wallb" when the app adopted a Microsoft Store product identity; see "Rebrand" below), that sets the desktop wallpaper (and, for the packaged MSIX build, the lock screen too) to a Letterboxd user's poster wall, generated **locally** — the app fetches the user's public Letterboxd diary RSS and poster images directly and composites the wall in-process with the `image` crate. (It used to call the posterboi API, `https://lb.sayed.app/api/wallpaper.jpg`, which composited the wall server-side in a Cloudflare Worker; that endpoint occasionally failed with CPU-limit errors, so generation was moved client-side. The website/API still exists — `F:\Github\lb` in this environment — and its `posterLayout.ts`/`wallpaper.jpg.ts`/`letterboxd.ts` are the source of truth this app's `poster_layout.rs`/`wallgen.rs`/`letterboxd.rs` were ported from; keep them in sync if the layout math or Letterboxd's CDN rules change.) User-facing docs live in `README.md`; this file is agent guidance. MSIX packaging/Store-identity docs live in `packaging/README.md`.
 
 ## Editing Win32 code
 
@@ -13,61 +13,83 @@ Windows-only Rust system-tray app that sets the desktop wallpaper to a Letterbox
 ## Build / verify
 
 - **Windows-only**: Win32 via the `windows` crate; CI runs on `windows-latest`. Won't build on other platforms.
-- **Edition 2024** with let-chains (`if let Some(cfg) = cfg && !cfg.username.is_empty()` in `main.rs`) — requires a recent stable Rust toolchain.
+- **Edition 2024** with let-chains (`if let Some(cfg) = cfg && !cfg.username.is_empty()` in `main.rs`, and elsewhere) — requires a recent stable Rust toolchain.
 - CI gate order (all must pass): `cargo fmt --all -- --check` → `cargo clippy --all-targets --all-features --locked -- -D warnings` → `cargo build --release --locked` → `cargo test --release --locked`.
-- **No tests exist** — `cargo test` is a no-op gate. Verification is fmt + clippy + release build.
-- `#![windows_subsystem = "windows"]` — no console. Diagnostics go to `%LOCALAPPDATA%\wallb\wallb.log` via `applog`; never `println!`.
+- **No tests exist** — `cargo test` is a no-op gate. Verification is fmt + clippy + release build. As of the most recent pass, `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings` are both **fully clean** (zero issues) across the whole repo — keep it that way; don't let new code reintroduce warnings.
+- `#![windows_subsystem = "windows"]` — no console. Diagnostics go to `%LOCALAPPDATA%\Wallboxd\Wallboxd.log` via `applog`; never `println!`.
 
 ## Release
 
 - Pushing a tag `v*.*.*` triggers `release.yml`, which **fails if the tag version ≠ Cargo.toml `version`**. Bump Cargo.toml before tagging.
-- Packages `target/release/wallb.exe` into `dist/wallb-$version-windows-x64.zip`.
+- Packages `target/release/Wallboxd.exe` into `dist/Wallboxd-$version-windows-x64.zip`. This is the plain-exe release (GitHub Releases); it's separate from the MSIX built via `packaging/build-msix.ps1` for Store submission — see `packaging/README.md`. **The plain exe can't set the lock screen at all** (no package identity — see "Lock screen" below); only the MSIX build can.
 
 ## Runtime data
 
-- Everything lives in `%LOCALAPPDATA%\wallb` (via `config::data_dir()`): `config.json`, `wallpaper.jpg` (cache), `wallb.log`. `LOCALAPPDATA` is required — the code `.expect()`s it.
+- Everything lives in `%LOCALAPPDATA%\Wallboxd` (via `config::data_dir()`): `config.json`, `wallpaper.jpg`/`lockscreen.jpg` (cache), `Wallboxd.log`, plus transient `lockscreen_{timestamp}.jpg` files (see "Lock screen"). `LOCALAPPDATA` is required — the code `.expect()`s it. `config::migrate_from_legacy()` (called once at startup in `main.rs`, before `Config::load()`) copies `config.json`/`wallpaper.jpg`/`lockscreen.jpg` from the pre-rename `%LOCALAPPDATA%\wallb` directory the first time the new directory has no config yet; it never deletes the old directory.
 
 ## Architecture
 
-- `main.rs` — hidden, never-shown message-only window that owns the tray icon, refresh timer, and settings dialog. Single-instance via named mutex `Local\WallbSingleInstanceMutex` (second launch exits silently). Refresh runs on a spawned thread; current `Config` lives in a `thread_local!`.
-- `tray.rs` — tray icon + popup menu (Refresh now / Settings... / Exit). Uses stock `IDI_APPLICATION` icon — no `.ico` resource is embedded.
-- `settings_dialog.rs` — modal Win32 dialog; state via `thread_local!` slots (safe because it's always modal). Interval parses with min 5, invalid input → 60. `poster_count` is hardcoded `None` from the dialog.
-- `progress.rs` — non-modal progress dialog (animated progress bar via a cycling `PBM_SETPOS` timer) shown only for manual refreshes (Refresh now / Settings OK). The refresh thread posts `WM_REFRESH_DONE` (wParam≠0 = failure, lParam = boxed error `String`) to it; failures keep the dialog open with the error + OK button. `progress::is_active()` guards against overlapping refreshes; timer auto-refreshes stay silent.
-- `wallpaper.rs` — fetches the poster wall, writes `wallpaper.jpg`, applies via `SystemParametersInfoW(SPI_SETDESKWALLPAPER)`. `reqwest` blocking + rustls (no native-tls). Resilient by design: 60s timeout, up to 3 attempts with 5s backoff on transient failures (5xx/timeouts/connection), because the API has a cold start; 4xx errors fail immediately.
-- `config.rs` — serde JSON config; `WallpaperStyle` maps to Windows registry values.
-- `autostart.rs` — `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, exe path written quoted.
+- `main.rs` — hidden, never-shown message-only window that owns the tray icon, refresh timer, and settings dialog. Single-instance via named mutex `Local\WallboxdSingleInstanceMutex` (second launch exits silently). Refresh runs on a spawned thread; current `Config` lives in a `thread_local!`.
+- `tray.rs` — tray icon + popup menu (Refresh now / Settings... / Exit). Uses stock `IDI_APPLICATION` icon — no `.ico` resource is embedded (the MSIX package has its own Start-menu/taskbar icons via `packaging/Assets/`, unrelated to this tray icon).
+- `settings_dialog.rs` — modal Win32 dialog; state via `thread_local!` slots (safe because it's always modal). Interval parses with min 5, invalid input → 60. Has its own embedded progress bar (no status label) for its Refresh Now / OK-triggered refreshes, driven the same way as `progress.rs` (see below) via a local `WM_PROGRESS_UPDATE`.
+- `progress.rs` — non-modal progress dialog shown only for manual refreshes (tray "Refresh now" / Settings OK). Starts with an indeterminate animated bar (cycling `PBM_SETPOS` on a timer) while the diary loads; switches to a real determinate bar the moment the first `WM_PROGRESS_UPDATE` arrives (wParam = tiles done, lParam = total tiles — posted per poster tile, from whichever worker thread finished it, by `wallgen::fetch_all_posters` via `wallpaper::refresh`'s `on_progress` callback) and updates the status label to `"Fetching posters (done/total)..."`. A `LAST_PROGRESS` high-water mark discards stale/out-of-order updates so the bar never visibly jumps backward. The refresh thread posts `WM_REFRESH_DONE` (wParam≠0 = failure, lParam = boxed error `String`) when done; failures keep the dialog open with the error + OK button. `progress::is_active()` guards against overlapping refreshes; timer auto-refreshes stay silent (pass `&|_, _| {}` as `on_progress`).
+- `wallpaper.rs` — orchestrates a refresh: calls `wallgen::generate` (threading an `on_progress: &(dyn Fn(u32, u32) + Sync)` callback through), writes `wallpaper.jpg`, applies via `SystemParametersInfoW(SPI_SETDESKWALLPAPER)`; if lock screen is enabled, also calls `set_lockscreen_file` (see "Lock screen" below). `reqwest` blocking + rustls (no native-tls), with a `Wallboxd/<version>` User-Agent since it talks to Letterboxd and its poster CDN directly. Resilient by design: 60s timeout, up to 3 attempts with 5s backoff on `WallError::Network` (timeouts/connection/5xx across the RSS fetch or any poster fetch); `WallError::NotFound`/`Other` (bad username, no diary entries, bad image data) fail immediately — see `wallerror.rs`.
+- `letterboxd.rs` — fetches `https://letterboxd.com/{username}/rss/` and parses it with `roxmltree` into poster URLs (`Vec<Option<String>>`, one per diary entry in feed order, `None` where an entry has no poster). Skips `/list/` items. Extracts the poster `<img src>` from each entry's HTML `<description>` via regex (mirrors the website's cheerio `$('p img')`), then normalizes it to the canonical 230x345 crop.
+- `poster_layout.rs` — exact port of the website's `posterLayout.ts`: the edge-fill grid math (`compute_edge_fill_layout`, `rows_for_count`) and `sized_poster_url`, which snaps a poster URL's crop height up to Letterboxd CDN's fixed allowlist (`345, 450, 690, 750, 900, 1500, 1800, 3000` — anything else is rejected).
+- `wallgen.rs` — the compositing itself, a port of the website's `wallpaper.jpg.ts`. **Poster fetching is concurrent, not sequential** — this was a real bug, not just a nice-to-have (see "Poster-fetch concurrency" below): `fetch_all_posters` runs `POSTER_FETCH_WORKERS` (8) worker threads over a shared `Mutex<VecDeque<usize>>` work queue inside `std::thread::scope`, each downloading+resizing (Lanczos3, via `image::imageops::resize`) one poster tile at a time and reporting completion through `on_progress` and an `mpsc::Sender`; results are collected back into an index-ordered `Vec<Option<RgbImage>>`. `generate()` then does the actual compositing single-threaded and fast (pure CPU, no network): allocates a white `RgbImage` canvas, overlays each fetched tile at its grid position, then fills the leftover edge margins by duplicating each row's edge-column poster (clipped to strip width) on both sides. Encodes to JPEG (quality 90) via `image::codecs::jpeg::JpegEncoder`. `MAX_TILES` (60) caps how many posters one wall composites, matching the old API's CPU/memory guard; `POSTER_FETCH_TIMEOUT` (20s, applied per-request, separate from the client's general 60s timeout) bounds how long one bad connection can occupy a worker.
+- `wallerror.rs` — `WallError` (`NotFound` / `Network` / `Other`) classifies failures from `letterboxd.rs`/`wallgen.rs` by retryability for `wallpaper.rs`'s retry loop.
+- `config.rs` — serde JSON config; `WallpaperStyle` maps to Windows registry values; `migrate_from_legacy()` for the wallb→Wallboxd data-dir carry-over.
+- `autostart.rs` — `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, exe path written quoted; also deletes the old `wallb` value every call (see "Rebrand").
 - `applog.rs` — append-only timestamped log.
 
 ## Gotchas
 
 - **Wallpaper style registry values must be written BEFORE `SPI_SETDESKWALLPAPER`** — Windows reads them at apply time, not after.
-- Offline story is intentional: `apply_cached()` re-applies the cached `wallpaper.jpg` at startup; any refresh failure leaves the cache and current wallpaper untouched. No separate fallback path.
+- Offline story is intentional: `apply_cached()` re-applies the cached `wallpaper.jpg` (and `lockscreen.jpg`, if enabled) at startup; any refresh failure leaves the cache and current wallpaper untouched. No separate fallback path.
 - `WallpaperStyle` registry encoding: Fill=10/0, Fit=6/0, Stretch=2/0, Center=0/0, Tile=0/1, Span=22/0.
 
-## posterboi API — `https://lb.sayed.app`
+## Poster-fetch concurrency — don't regress this to sequential
 
-Public, no auth, no sessions. Backs the wallpaper fetch. Source: posterboi repo `API.md`.
+The first local-generation implementation fetched poster tiles one at a time in a plain loop. Measured against real Letterboxd data (`abusayed`, a 40-tile 4K wall): **72 seconds total**, with individual poster fetches ranging from 60ms to 9.2s — Letterboxd's CDN latency is just that variable per-request. Combined with a progress dialog that only ever showed a static "Refreshing wallpaper..." label and a fake bouncing bar, this read as a hang, not a slow operation — that's the "refresh is hanging" / "no proper update on the UI" bug. Fixed two ways, both load-bearing:
 
-### `GET /api/wallpaper.jpg` — combined wall (the endpoint this app uses)
+1. **Concurrency** (`wallgen::fetch_all_posters`, `POSTER_FETCH_WORKERS = 8`): the same 40-tile 4K wall composites in ~2s instead of 72s. If you touch this function, keep it concurrent — reverting to a sequential loop reintroduces the original bug even though it'd look like a harmless simplification in a diff.
+2. **Real progress reporting**: `generate()`'s `on_progress` callback fires once per completed poster tile and is threaded all the way to both progress UIs. `progress.rs`'s floating dialog switches from an indeterminate animation to a real determinate bar and updates its status label to `"Fetching posters (done/total)..."`; `settings_dialog.rs`'s embedded bar (no label control there) switches to determinate the same way but stays textless. Don't let a future refactor silently drop `on_progress` back to a no-op outside of the intentional silent-timer-refresh path (`main.rs`'s `spawn_refresh`, which passes `&|_, _| {}` on purpose).
 
-- Params: `username` (required), `w` (default 1920, clamped `[64, 4096]`), `h` (default 1080, clamped `[64, 4096]`), `count` (default: as many as fit, capped at 60).
-- Returns one pre-composited JPEG, `Cache-Control: public, max-age=86400` (24h), cached by `username`+`w`+`h`+`count`.
-- Generation is slow (~3–10s); designed to be hit ~once/day per combination, not per refresh.
-- Errors: `400` missing username/invalid size, `404` no such user or no diary entries, `500` fetch/parse failure.
+`POSTER_FETCH_TIMEOUT` (20s) is deliberately shorter than the client's general `REQUEST_TIMEOUT` (60s, `wallpaper.rs`) — posters are small static CDN images with no cold-start excuse for taking that long, and with 8 concurrent workers one stuck request otherwise ties up 1/8 of the pool for way too long.
 
-### `GET /api/diary.json` — recent diary as JSON
+## Lock screen — resolved; here's the full investigation so it isn't repeated
 
-- Params: `username` (required), `h` (poster source height, default 345), `test` (any value → bundled offline sample data).
-- Returns up to 200 entries: `title`, `year`, `poster` (direct URL on `a.ltrbxd.com`, no auth), `uri`, `watched` (ms epoch), `rating` (`{text, score}`).
-- Cached 1h by `username`+`h`. Errors: `400`/`404`/`500`.
+`set_lockscreen_file` (`wallpaper.rs`) sets the lock screen image. This took multiple rounds of live testing to get right, and the trail matters if it ever breaks again — every hypothesis below except the last was implemented, tested on a real machine, and disproven, in this order:
 
-### `GET /api/proxy` — single poster re-serve
+1. **Discarded success/failure signal (real bug, fixed first).** The original code called `UserProfilePersonalizationSettings.TrySetLockScreenImageAsync`, a WinRT API that **does not throw on failure** — it resolves to a `bool` (`true` iff Windows actually applied the image), and the original code discarded that bool entirely. A declined request looked byte-for-byte identical to success: `refresh()` logged "wallpaper refreshed", no error ever appeared, and the lock screen just silently never changed. Reported as "the wallpaper is working but the lockscreen is not being setup." Fix: capture and check the bool.
+2. **Lock screen mode (Picture vs. Spotlight/Slideshow/third-party) — tested, disproven as sufficient.** Docs suggest `TrySetLockScreenImageAsync` needs plain "Picture" mode. On this machine the lock screen was initially managed by a third-party Store app (`55888ChristopheLavalle.DynamicTheme`) registered as the active background provider. Even after fully uninstalling it (not just toggling its own settings) and hand-picking a fresh picture via Windows Settings (confirmed via the registry's `ImageId_C`/`Details_C = "IMMERSIVE_CPL"` marker — the standard signature of "set through Windows' own Settings picture picker"), `TrySetLockScreenImageAsync` still returned `Ok(false)`.
+3. **Package (MSIX/APPX) identity — confirmed necessary, but not sufficient alone.** A plain unpackaged `.exe` has no package identity; `GetCurrentPackageFullName` (`windows::Win32::Storage::Packaging::Appx`, feature `Win32_Storage_Packaging_Appx`) returns `APPMODEL_ERROR_NO_PACKAGE` (15700) — confirmed identical for a plain `powershell.exe` too, i.e. the standard state of any unpackaged Win32 process. `set_lockscreen_file` checks this up front and fails fast with an accurate message. Packaging as MSIX (`packaging/`, Desktop Bridge: `EntryPoint="Windows.FullTrustApplication"` + `rescap:runFullTrust`) fixes this specific failure — confirmed live, `GetCurrentPackageFullName` succeeds when launched through the package. **But `TrySetLockScreenImageAsync` still returned `Ok(false)` even with identity present**, mode re-confirmed as genuine Picture, and no competing provider installed.
+4. **`PackageSignatureKind` (Developer vs. Store) — investigated, inconclusive, not the actual fix.** The sideloaded/self-signed test package reported `SignatureKind = Developer` (1), not `Store` (3) (`windows::ApplicationModel::Package::Current()?.SignatureKind()`). Plausible remaining suspect at the time, but never confirmed — no Store-signed build existed to compare against (the public Store listing returned `ProductNotFound` throughout this investigation).
+5. **Same-filename caching — tested, disproven.** Theory: the API might decline a new image with the exact same filename as the previously-set one (the app always applied from `lockscreen.jpg`/`wallpaper.jpg`, filename never changing). Worked around by copying to a uniquely-named file (`lockscreen_{timestamp}.jpg`, old ones cleaned up after) before each attempt. **Tested directly and it did not fix the decline**: confirmed a genuinely new file was created and used, `TrySetLockScreenImageAsync` still returned `Ok(false)`.
+6. **The actual fix: use the older `LockScreen.SetImageFileAsync` API instead.** `windows::System::UserProfile::LockScreen::SetImageFileAsync` (not `UserProfilePersonalizationSettings`) — an older, pre-`UserProfilePersonalizationSettings` UWP API that throws a real exception on failure instead of silently returning `false`. **Confirmed working end-to-end**: built the MSIX with this change, installed, launched through the package, and — rather than trusting "no exception was thrown" alone — read back `LockScreen::OriginalImageFile()` immediately after calling it, which reported exactly the freshly-set file path (`file:///.../lockscreen_<timestamp>.jpg`), confirmed across two independent fresh launches. This is the API's own authoritative record of the current lock screen image, not an inference — the fix genuinely works.
 
-- Params: `src` (required, must be `https://` on `ltrbxd.com` or subdomain — else `403`), `h` (optional resize).
-- Returns image bytes with `Access-Control-Allow-Origin: *`, 24h cache. Errors: `400`/`403`/passthrough of CDN status.
+Kept the unique-filename copy (step 5) alongside the new API (step 6) even though it wasn't re-tested for necessity with `LockScreen.SetImageFileAsync` specifically — it's harmless (a plain file copy with real cleanup logic, no behavior change on the success path), and there was no reason to remove working, low-risk code just because it solved a different API's problem.
 
-### Poster sizing (`h`) — critical gotcha
+**If you touch `set_lockscreen_file` again:**
+- Don't switch back to `UserProfilePersonalizationSettings.TrySetLockScreenImageAsync` — it was tested extensively (steps 1-4 above) and never worked from this app, packaged or not.
+- Don't re-chase "lock screen mode" or "same filename" as explanations if something regresses — both were implemented and directly disproven.
+- If it ever silently stops working again, verify with `LockScreen::OriginalImageFile()` read back immediately after the call, the same way this was actually confirmed — don't trust "no exception" alone as proof, and don't trust registry archaeology (`HKCU\...\Lock Screen`'s `ImageId_A/B/C/D` rotation-cache structure never reflected this API's changes in testing, even when the change was independently confirmed working via `OriginalImageFile()`).
 
-- Letterboxd's CDN only honors an **exact 2:3 ratio** AND a **hard allowlist of heights**: `345, 450, 690, 750, 900, 1500, 1800, 3000`. Anything else is rejected.
-- Both endpoints snap `h` up to the smallest allowlisted height ≥ your value (`h=800` → `900`); below 345 / above 3000 clamps to the nearest end.
-- Request `h` = the actual pixel height you'll draw the poster at — more wastes bandwidth, less upscales and looks soft.
+## Rebrand: wallb -> Wallboxd
+
+The app was originally named "wallb"; it was renamed to "Wallboxd" when a Microsoft Store product identity was assigned (`packaging/README.md`'s "Product identity" table: `abusayed.dev.Wallboxd`, publisher `abusayed.dev`). This was a full rename, not just a Store-listing label — chosen deliberately so the Store name matches what the app shows everywhere (window titles, tray tooltip), rather than a Store app called "Wallboxd" whose tray icon says "wallb":
+
+- Crate/package name `wallboxd`; binary target explicitly named `Wallboxd` (`[[bin]] name = "Wallboxd"` in `Cargo.toml`, since Cargo package names conventionally stay lowercase) so the exe is `Wallboxd.exe`.
+- Data dir, log filename, mutex name, window class names, tray tooltip, dialog titles, autostart Run-key value name, HTTP User-Agent: all `wallb`/`Wallb*` -> `Wallboxd`/`Wallboxd*`.
+- `config::migrate_from_legacy()` (see "Runtime data" above) carries an existing user's config/cache over from the old `%LOCALAPPDATA%\wallb` directory automatically, once, on first launch of the renamed build. `autostart::set()` also deletes the old `wallb` Run-key value every time it runs (whether enabling or disabling), so a stale entry pointing at a since-removed old exe doesn't linger.
+- Deliberately **not** touched: the old `%LOCALAPPDATA%\wallb` directory itself is never deleted (only read from, for migration) — some other tool or the user might still reference it, and it costs nothing to leave alone.
+- `packaging/Assets/*.png` are placeholder icons (solid color + "W", generated via PowerShell/`System.Drawing`) — real Wallboxd artwork still needs to replace them before Store submission.
+
+If you rename anything again, grep case-insensitively for the old name across `*.rs`/`*.md`/`*.toml`/`*.yml` first (`Grep -i` on the literal string) rather than assuming you've found every reference by memory — this rename touched 8 source files, both workflow files, and both top-level docs.
+
+## Letterboxd, direct (no posterboi API involved anymore)
+
+Wallboxd talks to Letterboxd itself, not `https://lb.sayed.app` — see "Architecture" above. Kept here as reference since the rules below (undocumented by Letterboxd) are exactly what `poster_layout.rs`/`letterboxd.rs` implement, ported from the posterboi repo's `API.md`/`posterLayout.ts` at `F:\Github\lb`.
+
+- Diary RSS: `GET https://letterboxd.com/{username}/rss/` — up to 200 `<item>`s, most recent first; `404` if the username doesn't exist. Each entry's poster URL lives inside the HTML in `<description>`, as the first `<img src>` under a `<p>`.
+- Poster CDN (`a.ltrbxd.com`) sizing — **critical gotcha**: it only honors an **exact 2:3 ratio** AND a **hard allowlist of crop heights**: `345, 450, 690, 750, 900, 1500, 1800, 3000`. Anything else is rejected outright. `poster_layout::sized_poster_url` snaps a requested height up to the smallest allowlisted value ≥ it (`h=800` → `900`); below 345 / above 3000 clamps to the nearest end. Request the actual pixel height you'll resize down to — more wastes bandwidth, less upscales and looks soft.

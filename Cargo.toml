@@ -1,11 +1,18 @@
 [package]
-name = "wallb"
+name = "wallboxd"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "Wallboxd"
+path = "src/main.rs"
+
 [dependencies]
-reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls", "gzip"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 futures = "0.3"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security", "Win32_UI_HiDpi", "System_UserProfile", "Storage", "Storage_Streams", "Foundation", "Foundation_Collections"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+roxmltree = "0.20"
+regex = "1"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security", "Win32_UI_HiDpi", "System_UserProfile", "Storage", "Storage_Streams", "Foundation", "Foundation_Collections", "Win32_Storage_Packaging_Appx", "ApplicationModel"] }
