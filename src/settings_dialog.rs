@@ -117,16 +117,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             WM_COMMAND => {
                 let id = wparam.0 & 0xFFFF;
                 if id == ID_BTN_OK {
+                    // Belt-and-suspenders: OK/Cancel are disabled (EnableWindow)
+                    // for the duration of a Refresh Now, same as WM_CLOSE below,
+                    // so this shouldn't normally fire — but don't rely solely on
+                    // a disabled control's click being unreachable. Closing here
+                    // would orphan the still-running refresh thread and let
+                    // main.rs immediately spawn another one on top of it.
+                    if REFRESHING.with(|r| *r.borrow()) {
+                        return LRESULT(0);
+                    }
                     let cfg = get_current_config();
                     RESULT.with(|r| *r.borrow_mut() = Some(cfg));
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
                 } else if id == ID_BTN_CANCEL {
+                    if REFRESHING.with(|r| *r.borrow()) {
+                        return LRESULT(0);
+                    }
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
                 } else if id == ID_BTN_REFRESH {
                     let cfg = get_current_config();
-                    if cfg.username.is_empty() {
+                    if cfg.username.is_empty() || crate::wallpaper::is_in_progress() {
                         return LRESULT(0);
                     }
                     REFRESHING.with(|r| *r.borrow_mut() = true);
@@ -328,6 +340,7 @@ fn register_class_once() {
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
             lpszClassName: class_name(),
+            hIcon: crate::appicon::load(),
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);

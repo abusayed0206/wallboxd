@@ -1,16 +1,13 @@
-//! Direct port of posterboi's `posterLayout.ts` — shared layout math for a
-//! natural-size edge-fill poster collage. Individual posters keep their true
-//! aspect ratio; edge strips are filled by duplicating the middle column
-//! (clipped to strip width). Kept numerically identical to the TypeScript
-//! (same float math, same iteration order) so the wall this produces matches
-//! what the old remote API used to render.
+//! Shared layout math for a natural-size edge-fill poster collage.
+//! Individual posters keep their true aspect ratio; edge strips are filled
+//! by duplicating the middle column (clipped to strip width).
 
 use std::sync::LazyLock;
 
 pub const POSTER_RATIO: f64 = 230.0 / 345.0; // ~= 0.6667
 
 /// Letterboxd's poster CDN only honors this fixed set of crop heights at an
-/// exact 2:3 ratio — see `API.md` "Poster sizing" in the posterboi repo.
+/// exact 2:3 ratio — confirmed by direct testing against the CDN.
 const SAFE_POSTER_HEIGHTS: [u32; 8] = [345, 450, 690, 750, 900, 1500, 1800, 3000];
 
 static CROP_SIZE_RE: LazyLock<regex::Regex> =

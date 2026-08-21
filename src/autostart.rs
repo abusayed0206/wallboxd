@@ -7,10 +7,6 @@ use windows::core::{PCWSTR, w};
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const VALUE_NAME: PCWSTR = w!("Wallboxd");
-/// Pre-rename autostart entry name (the app was called "wallb" before
-/// adopting the "Wallboxd" Store identity) — deleted on every call so a
-/// stale entry pointing at a since-removed old exe doesn't linger.
-const LEGACY_VALUE_NAME: PCWSTR = w!("wallb");
 
 fn open_run_key() -> Option<HKEY> {
     let mut hkey = HKEY::default();
@@ -25,7 +21,6 @@ fn open_run_key() -> Option<HKEY> {
 pub fn set(enabled: bool) {
     let Some(hkey) = open_run_key() else { return };
     unsafe {
-        let _ = RegDeleteValueW(hkey, LEGACY_VALUE_NAME);
         if enabled {
             if let Ok(exe) = std::env::current_exe() {
                 // Quoted so explorer.exe doesn't misparse an install path

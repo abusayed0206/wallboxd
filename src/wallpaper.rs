@@ -1,6 +1,7 @@
 use crate::config::{Config, WallpaperStyle};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_SZ, RegCloseKey, RegOpenKeyExW, RegSetValueExW,
@@ -42,9 +43,64 @@ fn http_client() -> reqwest::blocking::Client {
         .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
+/// Guards `refresh()`/`apply_cached()` against overlapping execution.
+///
+/// Nothing previously stopped two of these from running at once: the tray's
+/// "Refresh now" stays fully clickable while the Settings dialog is open
+/// (`EnableWindow`-disabling the dialog's owner window doesn't block
+/// `WM_TRAYICON`, a custom message Shell32 posts directly), so a user could
+/// click "Refresh Now" inside Settings, then the tray's "Refresh now" before
+/// the first one finished — two concurrent calls, each writing
+/// `wallpaper.jpg`/`lockscreen.jpg` and each running `set_lockscreen_file`'s
+/// unique-file cleanup loop, which deletes every `lockscreen_*.jpg` except
+/// its *own* call's file. One call's cleanup could delete the *other* call's
+/// freshly-created file before that call's `LockScreen::SetImageFileAsync`
+/// got to use it — a plausible source of intermittent, hard-to-reproduce
+/// "failed to set lockscreen" errors with no clear cause in the log.
+/// `apply_cached()` does the same file writes and is reachable
+/// independently (e.g. synchronously on the UI thread right after saving
+/// settings), so it takes the same lock.
+static REFRESH_LOCK: AtomicBool = AtomicBool::new(false);
+
+struct RefreshGuard;
+
+impl RefreshGuard {
+    /// `None` if a refresh/apply is already in progress anywhere.
+    fn try_acquire() -> Option<Self> {
+        if REFRESH_LOCK.swap(true, Ordering::AcqRel) {
+            None
+        } else {
+            Some(RefreshGuard)
+        }
+    }
+}
+
+impl Drop for RefreshGuard {
+    fn drop(&mut self) {
+        REFRESH_LOCK.store(false, Ordering::Release);
+    }
+}
+
+/// Whether a `refresh()`/`apply_cached()` call is currently running anywhere
+/// in the process. UI code checks this *before* spawning a new refresh
+/// thread so an already-busy click fails fast with no dialog flash, instead
+/// of relying solely on `refresh()`'s own lock (which still exists as the
+/// authoritative guard — this is purely a UX nicety on top of it, and can
+/// race harmlessly with `try_acquire` itself: worst case is one redundant
+/// spawn that then gets the "already in progress" `Err` immediately).
+pub fn is_in_progress() -> bool {
+    REFRESH_LOCK.load(Ordering::Acquire)
+}
+
 /// `on_progress(done, total)` fires as poster tiles finish fetching (see
 /// `wallgen::generate`) — pass `&|_, _| {}` for a silent refresh.
 pub fn refresh(cfg: &Config, on_progress: &(dyn Fn(u32, u32) + Sync)) -> Result<(), String> {
+    let Some(_guard) = RefreshGuard::try_acquire() else {
+        return Err(
+            "Another refresh is already in progress — try again once it finishes.".to_string(),
+        );
+    };
+
     let (w, h) = screen_size();
     let client = http_client();
     let main_path = cache_path();
@@ -130,6 +186,14 @@ fn fetch_wallpaper(
 }
 
 pub fn apply_cached(cfg: &Config) -> Result<(), String> {
+    let Some(_guard) = RefreshGuard::try_acquire() else {
+        return Err(
+            "A refresh is already in progress; it will apply the current wallpaper/lock screen \
+            shortly, so skipping the redundant cached re-apply."
+                .to_string(),
+        );
+    };
+
     let main_path = cache_path();
     if main_path.exists() {
         set_wallpaper_file(&main_path, cfg.style)?;
@@ -302,4 +366,56 @@ fn set_style_registry(style: WallpaperStyle) -> Result<(), String> {
         r2.ok().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU32;
+
+    /// Regression test for a real bug: the tray's "Refresh now" stayed
+    /// clickable while the Settings dialog's own "Refresh Now" was running
+    /// (see `RefreshGuard`'s doc comment), letting two `refresh()`/
+    /// `apply_cached()` calls race on the same wallpaper/lock-screen files.
+    /// Exercises `RefreshGuard` directly (not the full `refresh()`, which
+    /// needs network + a real username) under genuine concurrent contention
+    /// — 8 threads racing for one lock — rather than asserting on the
+    /// single-threaded case, which would pass even with a broken guard.
+    #[test]
+    fn concurrent_refresh_guard_rejects_overlap() {
+        let acquired_count = Arc::new(AtomicU32::new(0));
+        let rejected_count = Arc::new(AtomicU32::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let acquired_count = Arc::clone(&acquired_count);
+            let rejected_count = Arc::clone(&rejected_count);
+            handles.push(std::thread::spawn(move || {
+                match RefreshGuard::try_acquire() {
+                    Some(_guard) => {
+                        acquired_count.fetch_add(1, Ordering::SeqCst);
+                        // Hold the lock briefly so the other 7 threads are
+                        // guaranteed to observe it held.
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    None => {
+                        rejected_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let acquired = acquired_count.load(Ordering::SeqCst);
+        let rejected = rejected_count.load(Ordering::SeqCst);
+        assert_eq!(acquired, 1, "exactly one thread should win the lock");
+        assert_eq!(rejected, 7, "the other 7 should be rejected, not race in");
+        assert!(
+            !REFRESH_LOCK.load(Ordering::SeqCst),
+            "lock must be released after all guards drop"
+        );
+    }
 }

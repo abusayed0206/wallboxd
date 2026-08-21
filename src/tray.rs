@@ -4,8 +4,8 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, HICON, IDI_APPLICATION, LoadIconW, MF_STRING,
-    SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, MF_STRING, SetForegroundWindow, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TrackPopupMenu,
 };
 use windows::core::PCWSTR;
 
@@ -15,12 +15,6 @@ pub const TRAY_ID: u32 = 1;
 pub const ID_REFRESH: u32 = 1001;
 pub const ID_SETTINGS: u32 = 1002;
 pub const ID_EXIT: u32 = 1003;
-
-fn app_icon() -> HICON {
-    // ponytail: stock system icon, no .ico resource to build/embed. Swap in a
-    // branded icon via LoadImageW(GetModuleHandle, resource id) if it matters.
-    unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() }
-}
 
 fn wide_tip(text: &str) -> [u16; 128] {
     let mut buf = [0u16; 128];
@@ -43,7 +37,7 @@ pub fn add(hwnd: HWND, tooltip: &str) {
     let mut nid = base_nid(hwnd);
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
-    nid.hIcon = app_icon();
+    nid.hIcon = crate::appicon::load();
     nid.szTip = wide_tip(tooltip);
     unsafe {
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);

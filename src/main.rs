@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+mod appicon;
 mod applog;
 mod autostart;
 mod config;
@@ -47,7 +48,6 @@ fn main() {
         return;
     };
 
-    config::migrate_from_legacy();
     let _ = std::fs::create_dir_all(config::data_dir());
     let cfg = Config::load();
 
@@ -214,6 +214,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(cfg) = cfg
                         && !cfg.username.is_empty()
                         && !progress::is_active()
+                        && !wallpaper::is_in_progress()
                     {
                         let dialog = progress::show(hwnd);
                         spawn_refresh_with_progress(cfg, dialog, hwnd, None);
@@ -236,7 +237,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Err(e) = wallpaper::apply_cached(&new_cfg) {
                             applog::info(&format!("apply_cached after settings change: {e}"));
                         }
-                        if !new_cfg.username.is_empty() && !progress::is_active() {
+                        if !new_cfg.username.is_empty()
+                            && !progress::is_active()
+                            && !wallpaper::is_in_progress()
+                        {
                             let dialog = progress::show(hwnd);
                             spawn_refresh_with_progress(
                                 new_cfg.clone(),
@@ -264,6 +268,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(cfg) = cfg
                     && !cfg.username.is_empty()
                     && !progress::is_active()
+                    && !wallpaper::is_in_progress()
                 {
                     spawn_refresh(cfg);
                 }

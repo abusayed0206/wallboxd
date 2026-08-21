@@ -16,3 +16,27 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 roxmltree = "0.20"
 regex = "1"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security", "Win32_UI_HiDpi", "System_UserProfile", "Storage", "Storage_Streams", "Foundation", "Foundation_Collections", "Win32_Storage_Packaging_Appx", "ApplicationModel"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+# Store-submission build: smaller, faster binary. LTO + a single codegen unit
+# let the optimizer see across the whole crate graph (meaningfully shrinks a
+# binary this size); strip removes debug symbols GitHub Releases/Store users
+# have no use for. opt-level=3 (not "s"/"z") because the poster-wall
+# compositing (Lanczos resize, JPEG encode) is real per-refresh CPU work, not
+# just idle tray-icon code — worth optimizing for speed over shaving a bit
+# more off an already-small binary.
+#
+# Deliberately NOT panic="abort": the poster-fetch worker pool
+# (wallgen::fetch_all_posters) does `queue.lock().unwrap()` on a shared
+# Mutex, and background refresh threads have their own `.unwrap()`s —
+# panic=abort would turn any single panic, anywhere, in any thread, into the
+# whole tray app silently vanishing (no tray icon, no log entry, nothing).
+# panic=unwind keeps a panicking thread's failure contained to that thread,
+# matching the "resilient by design" architecture documented in AGENTS.md.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

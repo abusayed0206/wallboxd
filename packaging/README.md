@@ -52,6 +52,14 @@ This is the minimal valid set (one scale each) — fine for local sideload
 testing. Partner Center will separately ask for a fuller icon/screenshot set
 during Store listing setup regardless of what's baked into the package.
 
+The **exe itself** also has an embedded icon now — `assets/icon.ico` at the
+repo root (not under `packaging/`), embedded via `build.rs`, same placeholder
+"W" design as the `Assets/*.png` tiles above for visual consistency. This is
+what Explorer, Task Manager, and Alt-Tab show for `Wallboxd.exe` regardless
+of MSIX packaging, and what the tray icon uses too (`tray.rs`). Replace it
+alongside the MSIX tile assets before Store submission — see the main
+`AGENTS.md`'s "Icon" section for how it was built and how to verify it.
+
 ## Local build + test-sideload
 
 ```powershell

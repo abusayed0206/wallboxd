@@ -1,8 +1,6 @@
-//! Local port of posterboi's `wallpaper.jpg.ts` — composites a Letterboxd
-//! poster wall in-process instead of downloading one from the (CPU-limited,
-//! occasionally-failing) Cloudflare Worker. Same layout math
-//! (`poster_layout`), same edge-fill compositing order, just backed by the
-//! `image` crate instead of `@cf-wasm/photon`.
+//! Composites a Letterboxd poster wall in-process: layout math
+//! (`poster_layout`), fetching, resizing, and edge-fill compositing, all
+//! backed by the `image` crate.
 //!
 //! Poster tiles are fetched over the network, one request per tile — sequential
 //! fetching was measured (against real Letterboxd data, a 40-tile 4K wall) at

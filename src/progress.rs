@@ -285,6 +285,7 @@ fn register_class_once() {
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
             lpszClassName: class_name(),
+            hIcon: crate::appicon::load(),
             ..Default::default()
         };
         RegisterClassW(&wc);
