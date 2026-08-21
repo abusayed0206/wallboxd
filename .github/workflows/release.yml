@@ -35,11 +35,25 @@ jobs:
             Write-Error "Tag version ($tag) does not match Cargo.toml version ($cargoVersion). Bump Cargo.toml before tagging."
             exit 1
           }
+          # AppxManifest.xml's Version carries an extra ".0" (4th component,
+          # required to stay 0 for Store submission - see packaging/README.md).
+          # Matched against the whole file as one string (not line-by-line,
+          # since <Identity ...> and Version="..." are on different lines)
+          # and anchored to the Identity element specifically: an unanchored
+          # pattern would also match MinVersion/MaxVersionTested further
+          # down, and (confirmed by testing) even the XML declaration's own
+          # `version="1.0"` attribute under case-insensitive matching.
+          $manifestXml = Get-Content packaging/AppxManifest.xml -Raw
+          $manifestVersion = [regex]::Match($manifestXml, '<Identity[\s\S]*?\sVersion="([^"]+)"').Groups[1].Value
+          if ($manifestVersion -ne "$tag.0") {
+            Write-Error "AppxManifest.xml Version ($manifestVersion) does not match tag ($tag.0). Bump packaging/AppxManifest.xml before tagging."
+            exit 1
+          }
 
       - name: Build (release)
         run: cargo build --release --locked
 
-      - name: Package
+      - name: Package plain exe
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}"
@@ -48,8 +62,25 @@ jobs:
           Copy-Item target/release/Wallboxd.exe -Destination $stageDir
           Compress-Archive -Path "$stageDir/*" -DestinationPath "dist/Wallboxd-$version-windows-x64.zip"
 
+      - name: Package MSIX
+        shell: pwsh
+        run: |
+          .\packaging\build-msix.ps1 -SkipBuild
+          $version = "${{ github.ref_name }}"
+          Copy-Item packaging/build/Wallboxd.msix -Destination "dist/Wallboxd-$version-windows-x64.msix"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          # Explicit extensions, not `dist/*` - the exe zip's staging step
+          # also leaves the loose `dist/Wallboxd-*-windows-x64/` directory
+          # behind (confirmed locally), which a bare `dist/*` glob would
+          # also pick up and try to upload as a release asset.
+          files: |
+            dist/*.zip
+            dist/*.msix
           generate_release_notes: true
+          body: |
+            **Two downloads:**
+            - `Wallboxd-*-windows-x64.zip` - plain exe, no installer. Simplest option, but can't set the lock screen (needs package identity).
+            - `Wallboxd-*-windows-x64.msix` - unsigned MSIX. Enables the lock screen feature, but Windows won't install an unsigned package by default - see [`packaging/README.md`](https://github.com/${{ github.repository }}/blob/main/packaging/README.md#local-build--test-sideload) for the local test-signing + sideloading steps. For a normal signed install, use the Microsoft Store listing instead once it's live.
