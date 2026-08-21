@@ -18,8 +18,9 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  IgnorableNamespaces="uap desktop rescap">
 
   <Identity
     Name="abusayed.dev.Wallboxd"
@@ -51,6 +52,16 @@
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
       </uap:VisualElements>
+      <Extensions>
+        <!-- TaskId must match autostart.rs's TASK_ID exactly, since that's
+             how StartupTask::GetAsync finds this task. Registry Run keys and the
+             Startup folder are both unsupported for packaged apps; this
+             extension plus the StartupTask WinRT API is the documented
+             replacement, and is what shows up in Task Manager's Startup tab. -->
+        <desktop:Extension Category="windows.startupTask" Executable="Wallboxd.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="WallboxdStartupTask" Enabled="true" DisplayName="Wallboxd" />
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
 

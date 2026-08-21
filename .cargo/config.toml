@@ -1,0 +1,9 @@
+[target.x86_64-pc-windows-msvc]
+# Statically links the MSVC C/C++ runtime (VCRUNTIME140.dll, the UCRT) into
+# the exe instead of importing it from the OS. Confirmed the default dynamic
+# build imports VCRUNTIME140.dll, which — unlike the UCRT's api-ms-win-crt-*
+# forwarders — isn't guaranteed present on Windows without the Visual C++
+# Redistributable installed; this removes that dependency so the exe (and
+# the MSIX built from it) runs standalone on a bare Windows 10/11 install
+# with nothing extra to download.
+rustflags = ["-C", "target-feature=+crt-static"]

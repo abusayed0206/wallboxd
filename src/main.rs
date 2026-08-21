@@ -50,17 +50,20 @@ fn main() {
 
     let _ = std::fs::create_dir_all(config::data_dir());
     let cfg = Config::load();
+    autostart::set(cfg.autostart);
 
     let hwnd = create_main_window();
 
-    if let Err(e) = wallpaper::apply_cached(&cfg) {
+    if cfg.enabled
+        && let Err(e) = wallpaper::apply_cached(&cfg)
+    {
         applog::info(&format!("no cached wallpaper on startup: {e}"));
     }
 
     tray::add(hwnd, &tooltip_for(&cfg));
     start_timer(hwnd, cfg.interval_minutes);
 
-    if !cfg.username.is_empty() {
+    if cfg.enabled && !cfg.username.is_empty() {
         spawn_refresh(cfg.clone());
     }
 
@@ -87,6 +90,8 @@ fn acquire_single_instance() -> Option<HANDLE> {
 fn tooltip_for(cfg: &Config) -> String {
     if cfg.username.is_empty() {
         "Wallboxd - not configured".to_string()
+    } else if !cfg.enabled {
+        format!("Wallboxd - {} (disabled)", cfg.username)
     } else {
         format!("Wallboxd - {}", cfg.username)
     }
@@ -234,10 +239,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
                         tray::set_tooltip(hwnd, &tooltip_for(&new_cfg));
 
-                        if let Err(e) = wallpaper::apply_cached(&new_cfg) {
+                        if new_cfg.enabled
+                            && let Err(e) = wallpaper::apply_cached(&new_cfg)
+                        {
                             applog::info(&format!("apply_cached after settings change: {e}"));
                         }
-                        if !new_cfg.username.is_empty()
+                        if new_cfg.enabled
+                            && !new_cfg.username.is_empty()
                             && !progress::is_active()
                             && !wallpaper::is_in_progress()
                         {
@@ -266,6 +274,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if wparam.0 == TIMER_REFRESH {
                 let cfg = STATE.with(|s| s.borrow().clone());
                 if let Some(cfg) = cfg
+                    && cfg.enabled
                     && !cfg.username.is_empty()
                     && !progress::is_active()
                     && !wallpaper::is_in_progress()
@@ -284,7 +293,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             STATE.with(|s| *s.borrow_mut() = Some(*old_cfg.clone()));
             tray::set_tooltip(hwnd, &tooltip_for(&old_cfg));
             start_timer(hwnd, old_cfg.interval_minutes);
-            if let Err(e) = wallpaper::apply_cached(&old_cfg) {
+            if old_cfg.enabled
+                && let Err(e) = wallpaper::apply_cached(&old_cfg)
+            {
                 applog::error(&format!("failed to re-apply old wallpaper on revert: {e}"));
             }
             LRESULT(0)

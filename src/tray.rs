@@ -73,7 +73,7 @@ pub fn show_menu(hwnd: HWND, x: i32, y: i32) {
             menu,
             MF_STRING,
             ID_SETTINGS as usize,
-            PCWSTR::from_raw(w("Settings...").as_ptr()),
+            PCWSTR::from_raw(w("Settings").as_ptr()),
         );
         let _ = AppendMenuW(
             menu,

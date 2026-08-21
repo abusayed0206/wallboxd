@@ -6,6 +6,7 @@ use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, PBM_GETPOS, PBM_SETPOS, PBM_SETRANGE32, PROGRESS_CLASS,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST,
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
@@ -20,6 +21,10 @@ use windows::core::{PCWSTR, w};
 const ID_BTN_REFRESH: usize = 2003;
 const ID_BTN_OK: usize = 2004;
 const ID_BTN_CANCEL: usize = 2005;
+const ID_BTN_GITHUB: usize = 2006;
+const ID_CHK_ENABLE: usize = 2007;
+
+const GITHUB_URL: &str = "https://github.com/abusayed0206/wallboxd.git";
 
 const WM_REFRESH_DONE: u32 = WM_APP + 2;
 /// Posted (possibly many times, from any of the poster-fetch worker threads —
@@ -32,7 +37,7 @@ const PROGRESS_STEP: i32 = 5;
 thread_local! {
     static RESULT: RefCell<Option<Config>> = const { RefCell::new(None) };
     #[allow(clippy::type_complexity)]
-    static CTRLS: RefCell<Option<(HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND)>> = const { RefCell::new(None) };
+    static CTRLS: RefCell<Option<(HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND)>> = const { RefCell::new(None) };
     static REFRESHING: RefCell<bool> = const { RefCell::new(false) };
     // Set once the first real WM_PROGRESS_UPDATE arrives, so the indeterminate
     // animation timer stops fighting over the bar's position with real data.
@@ -77,7 +82,9 @@ fn apply_font(hwnd: HWND) {
 
 fn get_current_config() -> Config {
     CTRLS.with(|c| unsafe {
-        let (u, style, i, count_hwnd, a, l_check, l_user, _, _, _, _) = c.borrow().unwrap();
+        let (enable_check, u, style, i, count_hwnd, a, l_check, l_user, _, _, _, _) =
+            c.borrow().unwrap();
+        let enabled = SendMessageW(enable_check, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
         let username = get_text(u);
         let sel_interval = SendMessageW(i, CB_GETCURSEL, None, None).0 as i32;
         let interval = INTERVALS
@@ -100,6 +107,7 @@ fn get_current_config() -> Config {
             count_str.parse::<u32>().ok().map(|v| v.min(60))
         };
         Config {
+            enabled,
             username,
             interval_minutes: interval,
             autostart,
@@ -145,6 +153,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
                     CTRLS.with(|c| {
                         let (
+                            enable_check,
                             u,
                             style,
                             i,
@@ -157,6 +166,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             can_btn,
                             prog,
                         ) = c.borrow().unwrap();
+                        let _ = EnableWindow(enable_check, false);
                         let _ = EnableWindow(u, false);
                         let _ = EnableWindow(style, false);
                         let _ = EnableWindow(i, false);
@@ -200,6 +210,40 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     });
 
                     LRESULT(0)
+                } else if id == ID_BTN_GITHUB {
+                    let url: Vec<u16> = GITHUB_URL
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
+                    // "open" a URL string just hands it to the OS's default
+                    // browser, same as double-clicking a link, no shell
+                    // execute flags needed. Fire-and-forget: nothing useful
+                    // to do with the HINSTANCE-shaped result code here.
+                    let _ = ShellExecuteW(
+                        Some(hwnd),
+                        w!("open"),
+                        PCWSTR::from_raw(url.as_ptr()),
+                        PCWSTR::null(),
+                        PCWSTR::null(),
+                        windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+                    );
+                    LRESULT(0)
+                } else if id == ID_CHK_ENABLE {
+                    // BS_AUTOCHECKBOX already flipped its own check state
+                    // before sending this notification, so reading it back
+                    // here reflects the click that just happened.
+                    CTRLS.with(|c| {
+                        if let Some((enable_check, _, _, _, _, autostart, lock_check, ..)) =
+                            c.borrow().as_ref()
+                        {
+                            let checked = SendMessageW(*enable_check, BM_GETCHECK, None, None).0
+                                as u32
+                                == BST_CHECKED.0;
+                            let _ = EnableWindow(*lock_check, checked);
+                            let _ = EnableWindow(*autostart, checked);
+                        }
+                    });
+                    LRESULT(0)
                 } else {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -210,7 +254,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     && !REAL_PROGRESS.with(|r| *r.borrow())
                 {
                     CTRLS.with(|c| {
-                        if let Some((_, _, _, _, _, _, _, _, _, _, bar)) = c.borrow().as_ref() {
+                        if let Some((_, _, _, _, _, _, _, _, _, _, _, bar)) = c.borrow().as_ref() {
                             let pos = SendMessageW(*bar, PBM_GETPOS, None, None).0 as i32;
                             let next = if pos + PROGRESS_STEP > 100 {
                                 0
@@ -239,7 +283,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if is_newer {
                     REAL_PROGRESS.with(|r| *r.borrow_mut() = true);
                     CTRLS.with(|c| {
-                        if let Some((_, _, _, _, _, _, _, _, _, _, bar)) = c.borrow().as_ref() {
+                        if let Some((_, _, _, _, _, _, _, _, _, _, _, bar)) = c.borrow().as_ref() {
                             let _ = SendMessageW(
                                 *bar,
                                 PBM_SETRANGE32,
@@ -276,8 +320,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 REFRESHING.with(|r| *r.borrow_mut() = false);
 
                 CTRLS.with(|c| {
-                    let (u, style, i, count, a, l_check, l_user, ref_btn, ok_btn, can_btn, prog) =
-                        c.borrow().unwrap();
+                    let (
+                        enable_check,
+                        u,
+                        style,
+                        i,
+                        count,
+                        a,
+                        l_check,
+                        l_user,
+                        ref_btn,
+                        ok_btn,
+                        can_btn,
+                        prog,
+                    ) = c.borrow().unwrap();
+                    let _ = EnableWindow(enable_check, true);
                     let _ = EnableWindow(u, true);
                     let _ = EnableWindow(style, true);
                     let _ = EnableWindow(i, true);
@@ -431,6 +488,45 @@ fn label(
     }
 }
 
+/// Same as `label()`, but centered text from an owned `&str` instead of a
+/// compile-time `PCWSTR` literal, for the version/build label whose text is
+/// only known at runtime.
+fn centered_label(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    text: &str,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
+    // SS_CENTER's value (1) is stable ABI, defined in
+    // `Win32_System_SystemServices` — pulling in that whole feature for one
+    // constant isn't worth it, so it's inlined here instead.
+    const SS_CENTER: u32 = 1;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let hwnd = CreateWindowExW(
+            Default::default(),
+            w!("STATIC"),
+            PCWSTR::from_raw(wide.as_ptr()),
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(SS_CENTER)
+                | WS_CHILD
+                | WS_VISIBLE,
+            x,
+            y,
+            w,
+            h,
+            Some(parent),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .unwrap();
+        apply_font(hwnd);
+    }
+}
+
 fn edit(
     parent: HWND,
     instance: windows::Win32::Foundation::HMODULE,
@@ -465,17 +561,18 @@ fn edit(
 fn button(
     parent: HWND,
     instance: windows::Win32::Foundation::HMODULE,
-    text: PCWSTR,
+    text: &str,
     style: u32,
     id: usize,
     rect: (i32, i32, i32, i32),
 ) -> HWND {
     let (x, y, w, h) = rect;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let hwnd = CreateWindowExW(
             Default::default(),
             w!("BUTTON"),
-            text,
+            PCWSTR::from_raw(wide.as_ptr()),
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(style)
                 | WS_CHILD
                 | WS_VISIBLE
@@ -492,6 +589,41 @@ fn button(
         .unwrap();
         apply_font(hwnd);
         hwnd
+    }
+}
+
+/// Visually groups related controls behind a labeled frame — plain "BUTTON"
+/// class with `BS_GROUPBOX`, same as `button()` but non-interactive (no
+/// `WS_TABSTOP`, no command ID) so it's just a frame, never focusable.
+fn group_box(
+    parent: HWND,
+    instance: windows::Win32::Foundation::HMODULE,
+    text: PCWSTR,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) {
+    unsafe {
+        let hwnd = CreateWindowExW(
+            Default::default(),
+            w!("BUTTON"),
+            text,
+            windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                windows::Win32::UI::WindowsAndMessaging::BS_GROUPBOX as u32,
+            ) | WS_CHILD
+                | WS_VISIBLE,
+            x,
+            y,
+            w,
+            h,
+            Some(parent),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .unwrap();
+        apply_font(hwnd);
     }
 }
 
@@ -553,6 +685,17 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
 
+        // Two logical sections (Letterboxd account/wallpaper settings, lock
+        // screen settings) behind labeled group-box frames, rather than one
+        // flat stack of controls — plus the manifest-enabled themed common
+        // controls (see assets/app.manifest), this is most of what makes the
+        // dialog look like a modern Windows app instead of a Windows 2000
+        // property sheet.
+        const DLG_W: i32 = 380;
+        const DLG_H: i32 = 634;
+        const MARGIN: i32 = 12;
+        const INDENT: i32 = 24;
+
         let dlg = CreateWindowExW(
             Default::default(),
             class_name(),
@@ -560,8 +703,8 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            360,
-            480,
+            DLG_W,
+            DLG_H,
             Some(owner),
             None,
             Some(instance.into()),
@@ -569,70 +712,128 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         )
         .unwrap();
 
+        // Derived from the *actual* client rect rather than DLG_W: the
+        // window's non-client frame (title bar + border) eats a few pixels
+        // that CreateWindowExW's width includes but child controls don't get
+        // to use, so a content width computed straight from DLG_W silently
+        // overflows the real client area by that amount and throws off
+        // right-edge alignment of anything spanning the full width.
+        let mut client_rect = windows::Win32::Foundation::RECT::default();
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(dlg, &mut client_rect);
+        let client_w = client_rect.right;
+        let content_w = client_w - 2 * MARGIN;
+        let field_w = client_w - 2 * INDENT; // indented inside a group box
+
         let scr_w = GetSystemMetrics(SM_CXSCREEN);
         let scr_h = GetSystemMetrics(SM_CYSCREEN);
         let _ = SetWindowPos(
             dlg,
             Some(HWND::default()),
-            (scr_w - 360) / 2,
-            (scr_h - 480) / 2,
+            (scr_w - DLG_W) / 2,
+            (scr_h - DLG_H) / 2,
             0,
             0,
             SWP_NOZORDER | SWP_NOSIZE,
         );
 
-        label(dlg, instance, w!("Letterboxd username:"), 12, 12, 320, 18);
-        let hwnd_user = edit(dlg, instance, &current.username, 12, 32, 320, 24);
-
-        label(dlg, instance, w!("Wallpaper style:"), 12, 66, 320, 18);
-        let hwnd_style = style_combo(dlg, instance, current.style, 12, 86, 320, 120);
-
-        label(dlg, instance, w!("Refresh interval:"), 12, 120, 320, 18);
-        let hwnd_interval =
-            interval_combo(dlg, instance, current.interval_minutes, 12, 140, 320, 120);
-
-        label(
+        // --- Master switch: nothing runs automatically until this is on ---
+        let hwnd_enable = button(
             dlg,
             instance,
-            w!("Poster count (empty = auto, max 60):"),
-            12,
-            174,
-            320,
-            18,
-        );
-        let count_str = current
-            .poster_count
-            .map(|c| c.to_string())
-            .unwrap_or_default();
-        let hwnd_count = edit(dlg, instance, &count_str, 12, 194, 320, 24);
-
-        let hwnd_autostart = button(
-            dlg,
-            instance,
-            w!("Start with Windows"),
+            "Enable Wallboxd",
             windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
-            0,
-            (12, 228, 320, 22),
+            ID_CHK_ENABLE,
+            (MARGIN, 10, content_w, 22),
         );
-        let check_state = if current.autostart {
+        let enable_state = if current.enabled {
             BST_CHECKED.0
         } else {
             BST_UNCHECKED.0
         };
         let _ = SendMessageW(
-            hwnd_autostart,
+            hwnd_enable,
             BM_SETCHECK,
-            Some(WPARAM(check_state as usize)),
+            Some(WPARAM(enable_state as usize)),
             None,
+        );
+
+        // --- "Letterboxd" group: account + wallpaper generation settings ---
+        group_box(dlg, instance, w!("Letterboxd"), MARGIN, 44, content_w, 232);
+
+        label(
+            dlg,
+            instance,
+            w!("Letterboxd username:"),
+            INDENT,
+            66,
+            field_w,
+            16,
+        );
+        let hwnd_user = edit(dlg, instance, &current.username, INDENT, 84, field_w, 24);
+
+        label(
+            dlg,
+            instance,
+            w!("Wallpaper style:"),
+            INDENT,
+            118,
+            field_w,
+            16,
+        );
+        let hwnd_style = style_combo(dlg, instance, current.style, INDENT, 136, field_w, 120);
+
+        label(
+            dlg,
+            instance,
+            w!("Refresh interval:"),
+            INDENT,
+            170,
+            field_w,
+            16,
+        );
+        let hwnd_interval = interval_combo(
+            dlg,
+            instance,
+            current.interval_minutes,
+            INDENT,
+            188,
+            field_w,
+            120,
+        );
+
+        label(
+            dlg,
+            instance,
+            w!("Poster count (empty = auto, max 60):"),
+            INDENT,
+            222,
+            field_w,
+            16,
+        );
+        let count_str = current
+            .poster_count
+            .map(|c| c.to_string())
+            .unwrap_or_default();
+        let hwnd_count = edit(dlg, instance, &count_str, INDENT, 240, field_w, 24);
+
+        // --- "Lock Screen" group ---
+        group_box(
+            dlg,
+            instance,
+            w!("Lock Screen"),
+            MARGIN,
+            288,
+            content_w,
+            104,
         );
 
         let hwnd_lock_check = button(
             dlg,
             instance,
-            w!("Set lock screen wallpaper"),
+            "Set lock screen wallpaper",
             windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
             0,
-            (12, 256, 320, 22),
+            (INDENT, 310, field_w, 22),
         );
         let l_check_state = if current.set_lockscreen {
             BST_CHECKED.0
@@ -650,29 +851,57 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             dlg,
             instance,
             w!("Lock screen username (leave empty to use same):"),
-            12,
-            284,
-            320,
-            18,
+            INDENT,
+            338,
+            field_w,
+            16,
         );
         let hwnd_lock_user = edit(
             dlg,
             instance,
             &current.lockscreen_username,
-            12,
-            304,
-            320,
+            INDENT,
+            356,
+            field_w,
             24,
         );
+
+        // --- Outside any group: startup behavior, progress, actions ---
+        let hwnd_autostart = button(
+            dlg,
+            instance,
+            "Start with Windows",
+            windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
+            0,
+            (MARGIN, 404, content_w, 22),
+        );
+        let check_state = if current.autostart {
+            BST_CHECKED.0
+        } else {
+            BST_UNCHECKED.0
+        };
+        let _ = SendMessageW(
+            hwnd_autostart,
+            BM_SETCHECK,
+            Some(WPARAM(check_state as usize)),
+            None,
+        );
+
+        // Both depend on Wallboxd actually running to mean anything, so they
+        // can't be turned on while the master switch is off. Reflects the
+        // dialog's *opening* state here; the WM_COMMAND handler for
+        // ID_CHK_ENABLE keeps this in sync as the user toggles it live.
+        let _ = EnableWindow(hwnd_lock_check, current.enabled);
+        let _ = EnableWindow(hwnd_autostart, current.enabled);
 
         let hwnd_progress = CreateWindowExW(
             Default::default(),
             PROGRESS_CLASS,
             PCWSTR::null(),
             WS_CHILD, // Not visible initially
-            12,
-            340,
-            320,
+            MARGIN,
+            438,
+            content_w,
             18,
             Some(dlg),
             None,
@@ -681,26 +910,60 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         )
         .unwrap();
 
+        let btn_w = (content_w - 2 * 13) / 3; // 3 equal buttons, 13px gaps between
         let hwnd_refresh = button(
             dlg,
             instance,
-            w!("Refresh Now"),
+            "Refresh Now",
             0,
             ID_BTN_REFRESH,
-            (12, 368, 100, 28),
+            (MARGIN, 468, btn_w, 30),
         );
-        let hwnd_ok = button(dlg, instance, w!("OK"), 0, ID_BTN_OK, (140, 368, 80, 28));
+        let hwnd_ok = button(
+            dlg,
+            instance,
+            "OK",
+            0,
+            ID_BTN_OK,
+            (MARGIN + btn_w + 13, 468, btn_w, 30),
+        );
         let hwnd_cancel = button(
             dlg,
             instance,
-            w!("Cancel"),
+            "Cancel",
             0,
             ID_BTN_CANCEL,
-            (240, 368, 80, 28),
+            (MARGIN + 2 * (btn_w + 13), 468, btn_w, 30),
         );
+
+        // Narrow and centered, rather than spanning the full width like the
+        // row above: it's a secondary link, not an equal-weight action, so
+        // matching the primary row's width would overstate its importance.
+        const GITHUB_BTN_W: i32 = 100;
+        let _hwnd_github = button(
+            dlg,
+            instance,
+            "GitHub",
+            0,
+            ID_BTN_GITHUB,
+            (
+                MARGIN + (content_w - GITHUB_BTN_W) / 2,
+                512,
+                GITHUB_BTN_W,
+                26,
+            ),
+        );
+
+        let version_label = format!(
+            "v{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("WALLBOXD_GIT_HASH")
+        );
+        centered_label(dlg, instance, &version_label, MARGIN, 544, content_w, 16);
 
         CTRLS.with(|c| {
             *c.borrow_mut() = Some((
+                hwnd_enable,
                 hwnd_user,
                 hwnd_style,
                 hwnd_interval,

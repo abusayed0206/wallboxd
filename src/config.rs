@@ -50,6 +50,15 @@ impl WallpaperStyle {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
+    /// Master switch: when false, nothing runs automatically (startup,
+    /// timer, or post-settings-save refresh all skip) even if `username` is
+    /// set. Defaults to false so a fresh install does nothing until the user
+    /// explicitly opts in from Settings, with no wallpaper changes without
+    /// asking first. Manual actions (tray "Refresh now", the Settings
+    /// dialog's own "Refresh Now" button) intentionally bypass this, since
+    /// clicking them is itself the explicit consent.
+    #[serde(default)]
+    pub enabled: bool,
     pub username: String,
     pub interval_minutes: u32,
     pub autostart: bool,
@@ -66,7 +75,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            username: String::new(),
+            enabled: false,
+            username: "abusayed".to_string(),
             interval_minutes: 60,
             autostart: true,
             poster_count: None,

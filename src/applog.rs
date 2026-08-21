@@ -9,6 +9,18 @@ fn log_path() -> std::path::PathBuf {
 }
 
 fn write_line(level: &str, msg: &str) {
+    // Callers span multiple threads (main thread, refresh threads, the
+    // autostart thread) writing to the same file concurrently. `writeln!`
+    // issues several small `write` calls per line (one per literal/argument
+    // piece), so two threads' calls can interleave mid-line even though each
+    // individual `WriteFile` with FILE_APPEND_DATA is itself atomic -
+    // confirmed by observing corrupted/merged lines under concurrent writes
+    // during testing. Formatting into one `String` first and writing it in
+    // a single `write_all`, serialized by this mutex, makes each log line
+    // atomic regardless of how many threads are logging at once.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock();
+
     let _ = std::fs::create_dir_all(crate::config::data_dir());
     let Ok(mut file) = OpenOptions::new()
         .create(true)
@@ -21,7 +33,8 @@ fn write_line(level: &str, msg: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let _ = writeln!(file, "[{secs}] {level}: {msg}");
+    let line = format!("[{secs}] {level}: {msg}\n");
+    let _ = file.write_all(line.as_bytes());
 }
 
 pub fn info(msg: &str) {

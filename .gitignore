@@ -26,3 +26,8 @@
 .agents/
 .opencode/
 skills-lock.json
+
+# Internal reference docs (Store listing copy, screenshot how-to) — useful
+# locally, not meant to be committed. PRIVACY.md stays tracked; it needs a
+# public URL for the Store listing, so it has to live in the repo.
+/docs/
