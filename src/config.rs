@@ -98,10 +98,32 @@ fn config_path() -> PathBuf {
 
 impl Config {
     pub fn load() -> Self {
-        std::fs::read_to_string(config_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        let Some(raw) = std::fs::read_to_string(config_path()).ok() else {
+            // No config file at all: a genuine fresh install, so `enabled`
+            // stays at its intended false default.
+            return Self::default();
+        };
+        let Some(mut cfg) = serde_json::from_str::<Self>(&raw).ok() else {
+            return Self::default();
+        };
+        // Back-compat: a config.json saved before the `enabled` master
+        // switch was introduced has no "enabled" key, so `#[serde(default)]`
+        // silently resolves it to `false` - identical to a fresh install
+        // even though this user already had Wallboxd actively configured
+        // (possibly with set_lockscreen/username/etc. already set). Without
+        // this, every existing install goes silently inert on upgrade: no
+        // startup apply, no timer refresh, no post-settings-save refresh,
+        // and no error anywhere - it just looks like the wallpaper/lock
+        // screen stopped updating. Detect "key genuinely absent" (not just
+        // `false`) via a raw JSON parse and treat that case as already
+        // opted in, since an existing config file is itself evidence of
+        // prior active use.
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw)
+            && !map.contains_key("enabled")
+        {
+            cfg.enabled = true;
+        }
+        cfg
     }
 
     pub fn save(&self) -> std::io::Result<()> {

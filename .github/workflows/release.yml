@@ -37,14 +37,13 @@ jobs:
           }
           # AppxManifest.xml's Version carries an extra ".0" (4th component,
           # required to stay 0 for Store submission - see packaging/README.md).
-          # Matched against the whole file as one string (not line-by-line,
-          # since <Identity ...> and Version="..." are on different lines)
-          # and anchored to the Identity element specifically: an unanchored
-          # pattern would also match MinVersion/MaxVersionTested further
-          # down, and (confirmed by testing) even the XML declaration's own
-          # `version="1.0"` attribute under case-insensitive matching.
-          $manifestXml = Get-Content packaging/AppxManifest.xml -Raw
-          $manifestVersion = [regex]::Match($manifestXml, '<Identity[\s\S]*?\sVersion="([^"]+)"').Groups[1].Value
+          # Parsed as real XML (not a regex over the raw text) so attribute
+          # order/spacing changes can't silently break or mismatch this -
+          # confirmed: a harmless reformat (e.g. spaces around `=`) makes a
+          # hand-rolled regex return an empty match with no error, while this
+          # still reads the correct value regardless of formatting.
+          [xml]$manifestXml = Get-Content packaging/AppxManifest.xml -Raw
+          $manifestVersion = $manifestXml.Package.Identity.Version
           if ($manifestVersion -ne "$tag.0") {
             Write-Error "AppxManifest.xml Version ($manifestVersion) does not match tag ($tag.0). Bump packaging/AppxManifest.xml before tagging."
             exit 1
@@ -63,11 +62,24 @@ jobs:
           Compress-Archive -Path "$stageDir/*" -DestinationPath "dist/Wallboxd-$version-windows-x64.zip"
 
       - name: Package MSIX
+        id: package_msix
         shell: pwsh
+        # Isolated from the rest of the release: this step exercises the
+        # Windows SDK tool lookup (Find-SdkTool in build-msix.ps1) and
+        # makeappx, neither of which ci.yml runs on every push, so a tagged
+        # release could be the first time either is exercised against a
+        # given runner image. A failure here shouldn't cost the zip asset,
+        # which already built successfully by this point.
+        continue-on-error: true
         run: |
           .\packaging\build-msix.ps1 -SkipBuild
           $version = "${{ github.ref_name }}"
           Copy-Item packaging/build/Wallboxd.msix -Destination "dist/Wallboxd-$version-windows-x64.msix"
+
+      - name: Warn if MSIX packaging failed
+        if: steps.package_msix.outcome == 'failure'
+        shell: pwsh
+        run: Write-Warning "MSIX packaging failed - releasing the plain exe zip only, no .msix asset this time. Check the 'Package MSIX' step's log."
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -75,10 +87,14 @@ jobs:
           # Explicit extensions, not `dist/*` - the exe zip's staging step
           # also leaves the loose `dist/Wallboxd-*-windows-x64/` directory
           # behind (confirmed locally), which a bare `dist/*` glob would
-          # also pick up and try to upload as a release asset.
+          # also pick up and try to upload as a release asset. `dist/*.msix`
+          # simply won't match anything if the MSIX packaging step above
+          # failed (continue-on-error: true) - fail_on_unmatched_files:false
+          # makes that an empty match, not a broken release.
           files: |
             dist/*.zip
             dist/*.msix
+          fail_on_unmatched_files: false
           generate_release_notes: true
           body: |
             **Two downloads:**

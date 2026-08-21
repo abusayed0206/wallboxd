@@ -144,6 +144,21 @@ pub fn generate(
         on_progress,
     );
 
+    // A poster tile failing individually is tolerated (composite_core_grid
+    // just leaves that grid cell white) - but if every single tile failed,
+    // that's not a partial degradation, it's total network failure, and the
+    // "wall" would just be a blank white image. Applying that as the desktop
+    // wallpaper/lock screen would look like data loss with no error shown,
+    // so treat it as a failure instead - retryable, since it's almost
+    // certainly the same transient condition `fetch_wallpaper`'s retry loop
+    // already handles for the RSS fetch.
+    if layout.core_count > 0 && posters.iter().all(Option::is_none) {
+        return Err(WallError::Network(format!(
+            "all {} poster downloads failed for '{username}'",
+            layout.core_count
+        )));
+    }
+
     let mut canvas: RgbImage = ImageBuffer::from_pixel(w, h, Rgb([255, 255, 255]));
     let strip_w = layout.strip_w.round() as u32;
     // Row -> that row's edge-column poster (already resized), kept alive for

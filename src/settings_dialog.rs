@@ -23,6 +23,8 @@ const ID_BTN_OK: usize = 2004;
 const ID_BTN_CANCEL: usize = 2005;
 const ID_BTN_GITHUB: usize = 2006;
 const ID_CHK_ENABLE: usize = 2007;
+const ID_CHK_LOCKSCREEN: usize = 2008;
+const ID_CHK_AUTOSTART: usize = 2009;
 
 const GITHUB_URL: &str = "https://github.com/abusayed0206/wallboxd.git";
 
@@ -39,6 +41,19 @@ thread_local! {
     #[allow(clippy::type_complexity)]
     static CTRLS: RefCell<Option<(HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND)>> = const { RefCell::new(None) };
     static REFRESHING: RefCell<bool> = const { RefCell::new(false) };
+    // The config the dialog was opened with, so a "Refresh Now" preview
+    // (which applies the *unsaved, edited* config to the real desktop/lock
+    // screen/registry immediately - see PREVIEW_BACKUP below) can be undone
+    // by re-applying this if the user cancels instead of saving.
+    static OPENING_CFG: RefCell<Option<Config>> = const { RefCell::new(None) };
+    // Set the first time "Refresh Now" runs in this dialog session, from
+    // whatever wallpaper.jpg/lockscreen.jpg existed *before* that preview
+    // touched them - so Cancel can restore the pre-preview desktop instead
+    // of leaving previewed-but-never-saved settings applied for real. `None`
+    // until the first preview; deliberately not re-captured on subsequent
+    // previews within the same dialog session, so it always reflects the
+    // state from before *any* preview, not the most recent one.
+    static PREVIEW_BACKUP: RefCell<Option<PreviewBackup>> = const { RefCell::new(None) };
     // Set once the first real WM_PROGRESS_UPDATE arrives, so the indeterminate
     // animation timer stops fighting over the bar's position with real data.
     static REAL_PROGRESS: RefCell<bool> = const { RefCell::new(false) };
@@ -46,6 +61,90 @@ thread_local! {
     // jumping backward if updates from different worker threads arrive out
     // of order.
     static LAST_PROGRESS: RefCell<(u32, u32)> = const { RefCell::new((0, 0)) };
+}
+
+/// Whether `wallpaper.jpg`/`lockscreen.jpg` existed before the first
+/// "Refresh Now" preview in this dialog session touched them - lets restore
+/// tell "put the backup back" apart from "there was nothing here, delete
+/// what the preview created".
+struct PreviewBackup {
+    main_existed: bool,
+    lock_existed: bool,
+}
+
+fn preview_backup_path(p: &std::path::Path) -> std::path::PathBuf {
+    let mut s = p.as_os_str().to_os_string();
+    s.push(".previewbak");
+    std::path::PathBuf::from(s)
+}
+
+/// Snapshots the pre-preview `wallpaper.jpg`/`lockscreen.jpg` so a later
+/// Cancel can restore them. Only called once per dialog session (see
+/// `PREVIEW_BACKUP`'s doc comment) - callers must check it's still `None`
+/// first.
+fn backup_before_preview() {
+    let main_path = crate::wallpaper::cache_path();
+    let lock_path = crate::wallpaper::lockscreen_cache_path();
+    let main_existed = main_path.exists();
+    let lock_existed = lock_path.exists();
+    if main_existed {
+        let _ = std::fs::copy(&main_path, preview_backup_path(&main_path));
+    }
+    if lock_existed {
+        let _ = std::fs::copy(&lock_path, preview_backup_path(&lock_path));
+    }
+    PREVIEW_BACKUP.with(|b| {
+        *b.borrow_mut() = Some(PreviewBackup {
+            main_existed,
+            lock_existed,
+        })
+    });
+}
+
+/// Undoes a "Refresh Now" preview: restores the pre-preview cache files (or
+/// removes them if there was nothing before) and re-applies the dialog's
+/// *opening* config so the actual desktop wallpaper/lock screen/registry
+/// style match what's being restored, not whatever the preview last set. A
+/// no-op if no preview ran this session.
+fn restore_preview_if_needed() {
+    let Some(backup) = PREVIEW_BACKUP.with(|b| b.borrow_mut().take()) else {
+        return;
+    };
+    let main_path = crate::wallpaper::cache_path();
+    let lock_path = crate::wallpaper::lockscreen_cache_path();
+    let main_bak = preview_backup_path(&main_path);
+    let lock_bak = preview_backup_path(&lock_path);
+
+    if backup.main_existed {
+        let _ = std::fs::copy(&main_bak, &main_path);
+        let _ = std::fs::remove_file(&main_bak);
+    } else {
+        let _ = std::fs::remove_file(&main_path);
+    }
+    if backup.lock_existed {
+        let _ = std::fs::copy(&lock_bak, &lock_path);
+        let _ = std::fs::remove_file(&lock_bak);
+    } else {
+        let _ = std::fs::remove_file(&lock_path);
+    }
+
+    if let Some(opening) = OPENING_CFG.with(|c| c.borrow().clone()) {
+        let _ = crate::wallpaper::apply_cached(&opening);
+    }
+}
+
+/// Discards a preview backup without restoring anything - called on OK,
+/// where the just-previewed state is exactly what's being kept (saved as
+/// the new config), so there's nothing to undo, just backup files to clean
+/// up.
+fn discard_preview_backup() {
+    let Some(_backup) = PREVIEW_BACKUP.with(|b| b.borrow_mut().take()) else {
+        return;
+    };
+    let _ = std::fs::remove_file(preview_backup_path(&crate::wallpaper::cache_path()));
+    let _ = std::fs::remove_file(preview_backup_path(
+        &crate::wallpaper::lockscreen_cache_path(),
+    ));
 }
 
 fn get_font() -> WPARAM {
@@ -101,10 +200,14 @@ fn get_current_config() -> Config {
             .and_then(|idx| WallpaperStyle::ALL.get(idx).copied())
             .unwrap_or_default();
         let count_str = get_text(count_hwnd).trim().to_string();
+        // Clamped to [1, 60]: 0 would make `poster_layout::rows_for_count`
+        // return `None` (no valid layout fits zero posters), which used to
+        // surface as an opaque "invalid wallpaper size" error with no
+        // mention of the poster count field being the actual cause.
         let poster_count = if count_str.is_empty() {
             None
         } else {
-            count_str.parse::<u32>().ok().map(|v| v.min(60))
+            count_str.parse::<u32>().ok().map(|v| v.clamp(1, 60))
         };
         Config {
             enabled,
@@ -120,6 +223,20 @@ fn get_current_config() -> Config {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // See main.rs's wndproc for why this needs catch_unwind: unwinding across
+    // an extern "system" boundary aborts the whole process regardless of
+    // panic=unwind, taking the tray icon and this dialog down with it for
+    // what would otherwise be a single bad message.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        wndproc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_else(|_| {
+        crate::applog::error("panic in settings window procedure - message was not handled");
+        LRESULT(0)
+    })
+}
+
+unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
             WM_COMMAND => {
@@ -135,6 +252,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         return LRESULT(0);
                     }
                     let cfg = get_current_config();
+                    // Whatever "Refresh Now" previewed is exactly what's
+                    // being kept now - nothing to revert, just clean up the
+                    // backup files.
+                    discard_preview_backup();
                     RESULT.with(|r| *r.borrow_mut() = Some(cfg));
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
@@ -142,12 +263,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if REFRESHING.with(|r| *r.borrow()) {
                         return LRESULT(0);
                     }
+                    // Undo any "Refresh Now" preview so the real desktop/lock
+                    // screen isn't left showing settings the user just
+                    // discarded (see `restore_preview_if_needed`'s doc
+                    // comment - a no-op if no preview ran).
+                    restore_preview_if_needed();
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
                 } else if id == ID_BTN_REFRESH {
                     let cfg = get_current_config();
                     if cfg.username.is_empty() || crate::wallpaper::is_in_progress() {
                         return LRESULT(0);
+                    }
+                    if PREVIEW_BACKUP.with(|b| b.borrow().is_none()) {
+                        backup_before_preview();
                     }
                     REFRESHING.with(|r| *r.borrow_mut() = true);
 
@@ -201,12 +330,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             Ok(()) => (WPARAM(0), LPARAM(0)),
                             Err(e) => (WPARAM(1), LPARAM(Box::into_raw(Box::new(e)) as isize)),
                         };
-                        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                        let posted = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
                             Some(hwnd_thread),
                             WM_REFRESH_DONE,
                             w,
                             l,
                         );
+                        if posted.is_err() && w.0 != 0 {
+                            // Dialog window gone before delivery - nobody
+                            // will call Box::from_raw on this pointer to
+                            // reclaim it, so reclaim it here instead of
+                            // leaking.
+                            let _ = Box::from_raw(l.0 as *mut String);
+                        }
                     });
 
                     LRESULT(0)
@@ -353,6 +489,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_CLOSE => {
                 if !REFRESHING.with(|r| *r.borrow()) {
+                    // Closing via the title bar's X is Cancel in every other
+                    // respect (RESULT stays None, nothing gets saved), so it
+                    // needs the same preview undo Cancel does.
+                    restore_preview_if_needed();
                     let _ = DestroyWindow(hwnd);
                 }
                 LRESULT(0)
@@ -681,6 +821,11 @@ fn style_combo(
 pub fn show(owner: HWND, current: &Config) -> Option<Config> {
     register_class_once();
     RESULT.with(|r| *r.borrow_mut() = None);
+    OPENING_CFG.with(|c| *c.borrow_mut() = Some(current.clone()));
+    // Defensive: should already be None (both Cancel/Close and OK clear it),
+    // but a fresh dialog session must never inherit a stale backup pointer
+    // from a previous one.
+    PREVIEW_BACKUP.with(|b| *b.borrow_mut() = None);
 
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
@@ -832,7 +977,7 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             instance,
             "Set lock screen wallpaper",
             windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
-            0,
+            ID_CHK_LOCKSCREEN,
             (INDENT, 310, field_w, 22),
         );
         let l_check_state = if current.set_lockscreen {
@@ -872,7 +1017,7 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             instance,
             "Start with Windows",
             windows::Win32::UI::WindowsAndMessaging::BS_AUTOCHECKBOX as u32,
-            0,
+            ID_CHK_AUTOSTART,
             (MARGIN, 404, content_w, 22),
         );
         let check_state = if current.autostart {

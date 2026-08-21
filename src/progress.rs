@@ -172,6 +172,20 @@ pub fn show(owner: HWND) -> HWND {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // See main.rs's wndproc for why this needs catch_unwind: unwinding across
+    // an extern "system" boundary aborts the whole process regardless of
+    // panic=unwind, taking the tray icon down with it for what would
+    // otherwise be a single bad message.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wndproc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_else(|_| {
+        applog::error("panic in progress window procedure - message was not handled");
+        LRESULT(0)
+    })
+}
+
+fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER => {
             if wparam.0 == TIMER_ANIMATE && !REAL_PROGRESS.with(|r| r.get()) {

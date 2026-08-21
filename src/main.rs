@@ -138,9 +138,15 @@ fn spawn_refresh_with_progress(
             Err(e) => {
                 if let Some(old) = old_cfg {
                     let old_ptr = Box::into_raw(Box::new(old)) as isize;
-                    let _ = unsafe {
+                    let revert_posted = unsafe {
                         PostMessageW(Some(main), WM_REVERT_CONFIG, WPARAM(0), LPARAM(old_ptr))
                     };
+                    if revert_posted.is_err() {
+                        // Main window gone (e.g. app shutting down) - nobody
+                        // will ever call Box::from_raw on this pointer to
+                        // reclaim it, so reclaim it here instead of leaking.
+                        let _ = unsafe { Box::from_raw(old_ptr as *mut Config) };
+                    }
                 }
                 (WPARAM(1), LPARAM(Box::into_raw(Box::new(e)) as isize))
             }
@@ -201,6 +207,27 @@ fn create_main_window() -> HWND {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // Unwinding across this extern "system" boundary aborts the whole
+    // process regardless of the crate's panic=unwind profile setting (that
+    // setting only contains panics within a single thread when the unwind
+    // never has to cross a non-Rust-ABI callback boundary like this one) -
+    // confirmed empirically: a panic here prints "panic in a function that
+    // cannot unwind" / "aborting" and the process exits immediately, tray
+    // icon and all, with nothing logged. catch_unwind turns that into a
+    // logged error and a still-running (if one message's handling failed)
+    // tray app instead - RefCell borrows and RefreshGuard both release
+    // correctly during the unwind (Drop still runs), so this doesn't leave
+    // those in a stuck state.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wndproc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_else(|_| {
+        applog::error("panic in main window procedure - message was not handled");
+        LRESULT(0)
+    })
+}
+
+fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         tray::WM_TRAYICON => {
             let mouse_msg = lparam.0 as u32;
