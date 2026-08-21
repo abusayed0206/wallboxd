@@ -83,8 +83,4 @@ listing or its GitHub repository.
 ---
 
 *This document describes Wallboxd's actual behavior as implemented, based
-on its source code. It is provided as a starting point for Store submission
-and general transparency - if you have specific legal/regulatory
-requirements (GDPR representative, CCPA disclosures, a specific jurisdiction's
-notice requirements, etc.), have this reviewed by qualified counsel before
-relying on it as your final published policy.*
+on its source code.*

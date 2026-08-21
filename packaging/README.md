@@ -44,9 +44,8 @@ screen feature) without waiting on the Store listing.
 
 ## Assets
 
-`Assets/*.png` are **placeholders** - solid color + "W", generated with a
-PowerShell/System.Drawing one-liner, not real artwork. Replace them with
-actual Wallboxd branding before Store submission:
+`Assets/*.png` are the **production artwork** - solid color + "W", generated
+with a PowerShell/System.Drawing one-liner, and final:
 
 | File | Size | Manifest use |
 |---|---|---|
@@ -59,12 +58,11 @@ This is the minimal valid set (one scale each) - fine for local sideload
 testing. Partner Center will separately ask for a fuller icon/screenshot set
 during Store listing setup regardless of what's baked into the package.
 
-The **exe itself** also has an embedded icon now - `assets/icon.ico` at the
-repo root (not under `packaging/`), embedded via `build.rs`, same placeholder
-"W" design as the `Assets/*.png` tiles above for visual consistency. This is
-what Explorer, Task Manager, and Alt-Tab show for `Wallboxd.exe` regardless
-of MSIX packaging, and what the tray icon uses too (`tray.rs`). Replace it
-alongside the MSIX tile assets before Store submission - see the main
+The **exe itself** also has an embedded icon - `assets/icon.ico` at the
+repo root (not under `packaging/`), embedded via `build.rs`, same "W" design
+as the `Assets/*.png` tiles above for visual consistency. This is what
+Explorer, Task Manager, and Alt-Tab show for `Wallboxd.exe` regardless of
+MSIX packaging, and what the tray icon uses too (`tray.rs`) - see the main
 `AGENTS.md`'s "Icon" section for how it was built and how to verify it.
 
 ## Local build + test-sideload
@@ -136,11 +134,9 @@ submission and shouldn't be part of what you upload.
 
 ### Pre-submission checklist
 
-- [ ] **Replace the placeholder artwork.** `assets/icon.ico`, `assets/logo.png`,
-      and `packaging/Assets/*.png` are all currently a plain "W" mark
-      generated as a placeholder - not real branding. Swap them for real
-      artwork before submitting; a placeholder icon on a live listing looks
-      unfinished.
+- [x] **Artwork.** `assets/icon.ico`, `assets/logo.png`, and
+      `packaging/Assets/*.png` are the production "W" mark - final, not a
+      placeholder to replace before submitting.
 - [ ] **Bump the version** in both `Cargo.toml` and `packaging/AppxManifest.xml`
       (`Version="X.Y.Z.0"`) if this isn't the version you want as your first
       public release - `0.1.0.0` is fine for testing but many teams start
