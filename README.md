@@ -8,6 +8,12 @@
   Turns your Letterboxd diary into your Windows desktop wallpaper and lock screen.
 </p>
 
+<p align="center">
+  <a href="https://get.microsoft.com/installer/download/9n8jqgg8r5mq?referrer=appbadge" target="_self">
+    <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>
+  </a>
+</p>
+
 ---
 
 Wallboxd runs quietly in the system tray. On a schedule, it builds a
@@ -69,8 +75,9 @@ with nothing extra to download, no Visual C++ Redistributable required.
 
 ## Install
 
-Grab the latest release from the
-[Releases page](../../releases), or build from source:
+Get it from the [Microsoft Store](https://get.microsoft.com/installer/download/9n8jqgg8r5mq?referrer=appbadge),
+grab the latest release from the [Releases page](../../releases), or build
+from source:
 
 ```
 cargo build --release --locked
