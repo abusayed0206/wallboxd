@@ -97,15 +97,13 @@ fn config_path() -> PathBuf {
 }
 
 impl Config {
-    pub fn load() -> Self {
-        let Some(raw) = std::fs::read_to_string(config_path()).ok() else {
-            // No config file at all: a genuine fresh install, so `enabled`
-            // stays at its intended false default.
-            return Self::default();
-        };
-        let Some(mut cfg) = serde_json::from_str::<Self>(&raw).ok() else {
-            return Self::default();
-        };
+    /// Parses a config file's contents, tolerating a UTF-8 BOM (Notepad and
+    /// PowerShell's `Set-Content -Encoding utf8` both write one, and serde
+    /// rejects the whole file over it) and treating a pre-master-switch config
+    /// as already opted in (see `load`).
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+        let mut cfg = serde_json::from_str::<Self>(raw).ok()?;
         // Back-compat: a config.json saved before the `enabled` master
         // switch was introduced has no "enabled" key, so `#[serde(default)]`
         // silently resolves it to `false` - identical to a fresh install
@@ -118,16 +116,51 @@ impl Config {
         // `false`) via a raw JSON parse and treat that case as already
         // opted in, since an existing config file is itself evidence of
         // prior active use.
-        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(&raw)
+        if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(raw)
             && !map.contains_key("enabled")
         {
             cfg.enabled = true;
         }
-        cfg
+        Some(cfg)
+    }
+
+    pub fn load() -> Self {
+        let Some(raw) = std::fs::read_to_string(config_path()).ok() else {
+            // No config file at all: a genuine fresh install, so `enabled`
+            // stays at its intended false default.
+            return Self::default();
+        };
+        Self::parse(&raw).unwrap_or_default()
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(data_dir())?;
         std::fs::write(config_path(), serde_json::to_string_pretty(self)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tolerates_bom_and_treats_legacy_config_as_enabled() {
+        // A BOM is not valid JSON; before this was tolerated, a config file
+        // re-saved by Notepad/PowerShell silently reset every setting.
+        let raw = "\u{feff}{\"username\":\"abusayed\",\"interval_minutes\":60,\"autostart\":false}";
+        let cfg = Config::parse(raw).expect("BOM-prefixed config should parse");
+        assert_eq!(cfg.username, "abusayed");
+        assert!(
+            cfg.enabled,
+            "a config without the 'enabled' key is legacy and must stay active"
+        );
+    }
+
+    #[test]
+    fn parse_respects_explicit_disabled() {
+        let raw =
+            "{\"enabled\":false,\"username\":\"x\",\"interval_minutes\":60,\"autostart\":false}";
+        let cfg = Config::parse(raw).expect("config should parse");
+        assert!(!cfg.enabled, "an explicit false must not be overridden");
     }
 }

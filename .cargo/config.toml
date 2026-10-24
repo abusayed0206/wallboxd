@@ -7,3 +7,9 @@
 # the MSIX built from it) runs standalone on a bare Windows 10/11 install
 # with nothing extra to download.
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[alias]
+# Fast local build: skips LTO and single-codegen-unit compilation, same
+# runtime behavior for wallpaper generation, much quicker to rebuild.
+# Not used by CI/release, which stay on --release.
+bq = "build --profile quick"

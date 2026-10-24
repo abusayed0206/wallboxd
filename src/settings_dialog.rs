@@ -1,10 +1,11 @@
 use crate::config::{Config, WallpaperStyle};
-use std::cell::RefCell;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use std::cell::{Cell, RefCell};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, PBM_GETPOS, PBM_SETPOS, PBM_SETRANGE32, PROGRESS_CLASS,
 };
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -12,9 +13,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     GetSystemMetrics, GetWindowTextLengthW, GetWindowTextW, IsWindow, KillTimer, MSG,
     RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SWP_NOSIZE, SWP_NOZORDER,
-    SendMessageW, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_DESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    SendMessageW, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -38,6 +39,10 @@ const PROGRESS_STEP: i32 = 5;
 
 thread_local! {
     static RESULT: RefCell<Option<Config>> = const { RefCell::new(None) };
+    /// DPI the dialog's controls were created at, captured when `show()`
+    /// opens it. Every hardcoded control rectangle in this module is in
+    /// 96-DPI design units and goes through `s()` before reaching Win32.
+    static DPI: Cell<u32> = const { Cell::new(96) };
     #[allow(clippy::type_complexity)]
     static CTRLS: RefCell<Option<(HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND, HWND)>> = const { RefCell::new(None) };
     static REFRESHING: RefCell<bool> = const { RefCell::new(false) };
@@ -147,30 +152,14 @@ fn discard_preview_backup() {
     ));
 }
 
+/// Scales a 96-DPI design-unit coordinate to physical pixels for the DPI the
+/// dialog was created at.
+fn s(value: i32) -> i32 {
+    crate::uifont::scale(DPI.with(|d| d.get()), value)
+}
+
 fn get_font() -> WPARAM {
-    use std::sync::Once;
-    use windows::Win32::Graphics::Gdi::CreateFontIndirectW;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-        SystemParametersInfoW,
-    };
-    static mut FONT_WPARAM: usize = 0;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        let mut ncm = NONCLIENTMETRICSW {
-            cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-            ..Default::default()
-        };
-        let _ = SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS,
-            std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-            Some(&mut ncm as *mut _ as *mut core::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        );
-        let f = CreateFontIndirectW(&ncm.lfMessageFont);
-        FONT_WPARAM = std::mem::transmute::<windows::Win32::Graphics::Gdi::HFONT, usize>(f);
-    });
-    WPARAM(unsafe { FONT_WPARAM })
+    crate::uifont::message_font(DPI.with(|d| d.get()))
 }
 
 fn apply_font(hwnd: HWND) {
@@ -538,6 +527,13 @@ fn register_class_once() {
             hInstance: instance.into(),
             lpszClassName: class_name(),
             hIcon: crate::appicon::load(),
+            // Without a background brush the window never erases itself, and
+            // STATIC controls default to COLOR_BTNFACE in WM_CTLCOLORSTATIC -
+            // producing gray label bands over an unpainted client area. Using
+            // the same system face color for the dialog makes labels blend in.
+            hbrBackground: windows::Win32::Graphics::Gdi::GetSysColorBrush(
+                windows::Win32::Graphics::Gdi::COLOR_BTNFACE,
+            ),
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);
@@ -570,10 +566,10 @@ fn interval_combo(
                 | WS_CHILD
                 | WS_VISIBLE
                 | WS_TABSTOP,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -614,10 +610,10 @@ fn label(
             w!("STATIC"),
             text,
             WS_CHILD | WS_VISIBLE,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -653,10 +649,10 @@ fn centered_label(
             windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(SS_CENTER)
                 | WS_CHILD
                 | WS_VISIBLE,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -683,10 +679,10 @@ fn edit(
             w!("EDIT"),
             PCWSTR::from_raw(wide.as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -717,10 +713,10 @@ fn button(
                 | WS_CHILD
                 | WS_VISIBLE
                 | WS_TABSTOP,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             Some(windows::Win32::UI::WindowsAndMessaging::HMENU(id as *mut _)),
             Some(instance.into()),
@@ -753,10 +749,10 @@ fn group_box(
                 windows::Win32::UI::WindowsAndMessaging::BS_GROUPBOX as u32,
             ) | WS_CHILD
                 | WS_VISIBLE,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -785,10 +781,10 @@ fn style_combo(
                 | WS_CHILD
                 | WS_VISIBLE
                 | WS_TABSTOP,
-            x,
-            y,
-            w,
-            h,
+            s(x),
+            s(y),
+            s(w),
+            s(h),
             Some(parent),
             None,
             Some(instance.into()),
@@ -841,15 +837,36 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         const MARGIN: i32 = 12;
         const INDENT: i32 = 24;
 
+        // Everything below is authored at 96 DPI. The process is per-monitor
+        // DPI aware, so on a 125%/150% laptop the window must be created at
+        // its physical-pixel size and every child rectangle scaled to match,
+        // or the controls stay 100%-sized while the (DPI-correct) font grows
+        // past their bounds and the rows overlap.
+        let dpi = GetDpiForSystem();
+        DPI.with(|d| d.set(dpi));
+
+        // Desired client size in design units -> actual outer window size
+        // including the title bar/border at this DPI.
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        let mut frame = RECT {
+            left: 0,
+            top: 0,
+            right: s(DLG_W),
+            bottom: s(DLG_H),
+        };
+        let _ = AdjustWindowRectExForDpi(&mut frame, style, false, WINDOW_EX_STYLE(0), dpi);
+        let win_w = frame.right - frame.left;
+        let win_h = frame.bottom - frame.top;
+
         let dlg = CreateWindowExW(
             Default::default(),
             class_name(),
             w!("Wallboxd Settings"),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            DLG_W,
-            DLG_H,
+            win_w,
+            win_h,
             Some(owner),
             None,
             Some(instance.into()),
@@ -862,10 +879,12 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         // that CreateWindowExW's width includes but child controls don't get
         // to use, so a content width computed straight from DLG_W silently
         // overflows the real client area by that amount and throws off
-        // right-edge alignment of anything spanning the full width.
+        // right-edge alignment of anything spanning the full width. The
+        // result is converted back to design units here because the layout
+        // helpers scale it again.
         let mut client_rect = windows::Win32::Foundation::RECT::default();
         let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(dlg, &mut client_rect);
-        let client_w = client_rect.right;
+        let client_w = ((client_rect.right as f64) * 96.0 / dpi as f64).round() as i32;
         let content_w = client_w - 2 * MARGIN;
         let field_w = client_w - 2 * INDENT; // indented inside a group box
 
@@ -874,8 +893,8 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
         let _ = SetWindowPos(
             dlg,
             Some(HWND::default()),
-            (scr_w - DLG_W) / 2,
-            (scr_h - DLG_H) / 2,
+            (scr_w - win_w) / 2,
+            (scr_h - win_h) / 2,
             0,
             0,
             SWP_NOZORDER | SWP_NOSIZE,
@@ -1044,10 +1063,10 @@ pub fn show(owner: HWND, current: &Config) -> Option<Config> {
             PROGRESS_CLASS,
             PCWSTR::null(),
             WS_CHILD, // Not visible initially
-            MARGIN,
-            438,
-            content_w,
-            18,
+            s(MARGIN),
+            s(438),
+            s(content_w),
+            s(18),
             Some(dlg),
             None,
             Some(instance.into()),

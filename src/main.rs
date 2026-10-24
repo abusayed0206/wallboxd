@@ -9,6 +9,7 @@ mod poster_layout;
 mod progress;
 mod settings_dialog;
 mod tray;
+mod uifont;
 mod wallerror;
 mod wallgen;
 mod wallpaper;

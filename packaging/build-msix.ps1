@@ -6,7 +6,7 @@
     This does NOT replace Store submission - Partner Center re-signs whatever
     you upload with the Store's own certificate, so a manually-built .msix is
     only useful for local testing before you submit. Steps:
-      1. cargo build --release (unless -SkipBuild)
+      1. cargo build --profile release|quick (unless -SkipBuild)
       2. Stage AppxManifest.xml + Assets\ + Wallboxd.exe into packaging\build\
       3. makeappx pack -> packaging\build\Wallboxd.msix
       4. With -TestSign: generate (or reuse) a self-signed cert whose Subject
@@ -22,12 +22,17 @@
     Generate/reuse a local test certificate and sign the package with it.
 
 .PARAMETER SkipBuild
-    Skip `cargo build --release` and package whatever is already at
-    target\release\Wallboxd.exe.
+    Skip `cargo build` and package whatever is already in target\$Profile.
+
+.PARAMETER Profile
+    Cargo profile to package: `release` (default, used by CI) or `quick`
+    (fast local iteration profile, much faster to rebuild; see Cargo.toml).
 #>
 param(
     [switch]$TestSign,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateSet("release", "quick")]
+    [string]$Profile = "release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,17 +62,17 @@ $makeappx = Find-SdkTool "makeappx.exe"
 $signtool = Find-SdkTool "signtool.exe"
 
 if (-not $SkipBuild) {
-    Write-Host "==> cargo build --release"
+    Write-Host "==> cargo build --profile $Profile"
     Push-Location $repoRoot
     try {
-        cargo build --release --locked
+        cargo build --profile $Profile --locked
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
     } finally {
         Pop-Location
     }
 }
 
-$exePath = Join-Path $repoRoot "target\release\Wallboxd.exe"
+$exePath = Join-Path $repoRoot "target\$Profile\Wallboxd.exe"
 if (-not (Test-Path $exePath)) {
     throw "$exePath not found - build it first (omit -SkipBuild)."
 }

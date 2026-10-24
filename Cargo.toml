@@ -1,6 +1,6 @@
 [package]
 name = "wallboxd"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [[bin]]
@@ -40,3 +40,25 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+# Fast iteration profile for local testing: keeps the optimizations that
+# matter at runtime (poster resize/JPEG encode are real CPU work) while
+# skipping the two things that make `--release` slow: whole-program LTO and
+# single-codegen-unit compilation. Incremental keeps repeat builds quick.
+# Use `cargo bq` (alias in .cargo/config.toml) for this profile; it is not
+# used by CI or the release workflow, which stay on `--release`.
+[profile.quick]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+incremental = true
+debug = 0
+strip = true
+
+# Full debug info is the slowest part of a dev build/link in a crate graph this
+# size, and it is rarely needed here (panic messages + `applog` give the useful
+# diagnostics). Line tables keep backtraces symbolizable at a fraction of the
+# cost.
+[profile.dev]
+debug = "line-tables-only"

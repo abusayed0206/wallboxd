@@ -31,7 +31,7 @@ edit them:
 | Store URL | https://apps.microsoft.com/detail/9N8JQGG8R5MQ |
 | MSA App Id | `ad18f3ac-70a9-44d4-bbf8-fd9f9596f08b` - not currently wired into anything (no Microsoft Account/notification features exist yet); recorded here so it isn't lost if that changes later |
 
-`AppxManifest.xml`'s `Version` (`0.1.0.0`) should track `Cargo.toml`'s
+`AppxManifest.xml`'s `Version` (`0.1.1.0`) should track `Cargo.toml`'s
 `version` - bump both together. `release.yml` enforces this: it fails the
 release if the tag doesn't match `Cargo.toml`, or if `Cargo.toml` doesn't
 match this file's `Version` (minus the trailing `.0`).

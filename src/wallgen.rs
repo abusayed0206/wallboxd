@@ -152,7 +152,8 @@ pub fn generate(
     // so treat it as a failure instead - retryable, since it's almost
     // certainly the same transient condition `fetch_wallpaper`'s retry loop
     // already handles for the RSS fetch.
-    if layout.core_count > 0 && posters.iter().all(Option::is_none) {
+    let succeeded = posters.iter().filter(|p| p.is_some()).count();
+    if layout.core_count > 0 && succeeded == 0 {
         return Err(WallError::Network(format!(
             "all {} poster downloads failed for '{username}'",
             layout.core_count
@@ -175,7 +176,37 @@ pub fn generate(
     );
     fill_edge_strips(&mut canvas, &edge_col_images, poster_h, strip_w, w);
 
+    // Belt-and-suspenders for the original "blank wallpaper" report: whatever
+    // the cause (all tiles failed, a layout regression placing posters
+    // off-canvas, ...), never hand a nearly all-white image to Windows. The
+    // existing cache and desktop are left untouched instead.
+    if is_blank(&canvas) {
+        return Err(WallError::Network(format!(
+            "generated wallpaper would be blank ({succeeded}/{} posters downloaded) for \
+            '{username}'",
+            layout.core_count
+        )));
+    }
+
+    crate::applog::info(&format!(
+        "composited {succeeded}/{} posters for '{username}' at {w}x{h}",
+        layout.core_count
+    ));
+
     encode_jpeg(&canvas)
+}
+
+/// True when at least 95% of the canvas is still the pure-white background,
+/// i.e. the composited result would read as a blank wallpaper. Posters never
+/// cover a meaningful area with exact `#FFFFFF`, so this can't misfire on a
+/// legitimately bright wall.
+fn is_blank(canvas: &RgbImage) -> bool {
+    let total = canvas.width() as u64 * canvas.height() as u64;
+    if total == 0 {
+        return true;
+    }
+    let white = canvas.pixels().filter(|p| p.0 == [255, 255, 255]).count() as u64;
+    white * 100 >= total * 95
 }
 
 /// Draws each already-fetched poster tile onto the canvas at its grid
@@ -239,4 +270,42 @@ fn encode_jpeg(canvas: &RgbImage) -> Result<Vec<u8>, WallError> {
         .encode_image(canvas)
         .map_err(|e| WallError::Other(format!("JPEG encode failed: {e}")))?;
     Ok(jpeg_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_detection_rejects_white_and_accepts_a_real_wall() {
+        let white: RgbImage = ImageBuffer::from_pixel(100, 100, Rgb([255, 255, 255]));
+        assert!(
+            is_blank(&white),
+            "an untouched canvas must be treated as blank"
+        );
+
+        let mut mostly_white = white.clone();
+        for y in 0..10 {
+            for x in 0..10 {
+                mostly_white.put_pixel(x, y, Rgb([10, 20, 30]));
+            }
+        }
+        assert!(
+            is_blank(&mostly_white),
+            "1% non-white is still visually a blank wallpaper"
+        );
+
+        let mut poster_wall = white;
+        for y in 0..100 {
+            for x in 0..100 {
+                if x < 20 {
+                    poster_wall.put_pixel(x, y, Rgb([30 + x as u8, 60, 90]));
+                }
+            }
+        }
+        assert!(
+            !is_blank(&poster_wall),
+            "20% coverage is a real poster wall"
+        );
+    }
 }

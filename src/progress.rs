@@ -1,17 +1,18 @@
 use crate::applog;
 use std::cell::{Cell, RefCell};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     ICC_PROGRESS_CLASS, INITCOMMONCONTROLSEX, InitCommonControlsEx, PBM_GETPOS, PBM_SETPOS,
     PBM_SETRANGE32, PROGRESS_CLASS,
 };
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForSystem};
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, HMENU,
     KillTimer, RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SWP_NOSIZE, SWP_NOZORDER,
-    SendMessageW, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    SendMessageW, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW,
+    WS_CAPTION, WS_CHILD, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -41,6 +42,14 @@ thread_local! {
     // jumping backward if updates from different worker threads arrive out
     // of order.
     static LAST_PROGRESS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    /// DPI captured when the dialog opens; control rectangles below are in
+    /// 96-DPI design units and go through `s()`.
+    static DPI: Cell<u32> = const { Cell::new(96) };
+}
+
+/// Scales a 96-DPI design-unit coordinate to physical pixels.
+fn s(value: i32) -> i32 {
+    crate::uifont::scale(DPI.with(|d| d.get()), value)
 }
 
 pub fn is_active() -> bool {
@@ -48,29 +57,7 @@ pub fn is_active() -> bool {
 }
 
 fn get_font() -> WPARAM {
-    use std::sync::Once;
-    use windows::Win32::Graphics::Gdi::CreateFontIndirectW;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-        SystemParametersInfoW,
-    };
-    static mut FONT_WPARAM: usize = 0;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        let mut ncm = NONCLIENTMETRICSW {
-            cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-            ..Default::default()
-        };
-        let _ = SystemParametersInfoW(
-            SPI_GETNONCLIENTMETRICS,
-            std::mem::size_of::<NONCLIENTMETRICSW>() as u32,
-            Some(&mut ncm as *mut _ as *mut core::ffi::c_void),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        );
-        let f = CreateFontIndirectW(&ncm.lfMessageFont);
-        FONT_WPARAM = std::mem::transmute::<windows::Win32::Graphics::Gdi::HFONT, usize>(f);
-    });
-    WPARAM(unsafe { FONT_WPARAM })
+    crate::uifont::message_font(DPI.with(|d| d.get()))
 }
 
 /// Shows the progress dialog and returns its HWND so the caller can hand it
@@ -83,15 +70,34 @@ pub fn show(owner: HWND) -> HWND {
     LAST_PROGRESS.with(|p| p.set((0, 0)));
     unsafe {
         let instance = GetModuleHandleW(None).unwrap();
+        // Wider than the original 300: refresh errors ("Refresh failed: ...")
+        // are one long sentence, and a 276-unit single-line label clipped them
+        // after a few words, hiding the actual cause from the user.
+        const DLG_W: i32 = 360;
+        const DLG_H: i32 = 120;
+        let dpi = GetDpiForSystem();
+        DPI.with(|d| d.set(dpi));
+
+        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+        let mut frame = RECT {
+            left: 0,
+            top: 0,
+            right: s(DLG_W),
+            bottom: s(DLG_H),
+        };
+        let _ = AdjustWindowRectExForDpi(&mut frame, style, false, WINDOW_EX_STYLE(0), dpi);
+        let win_w = frame.right - frame.left;
+        let win_h = frame.bottom - frame.top;
+
         let dlg = CreateWindowExW(
             Default::default(),
             class_name(),
             w!("Wallboxd"),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            300,
-            120, // increased height slightly to fit better
+            win_w,
+            win_h,
             Some(owner),
             None,
             Some(instance.into()),
@@ -104,8 +110,8 @@ pub fn show(owner: HWND) -> HWND {
         let _ = SetWindowPos(
             dlg,
             Some(HWND::default()),
-            (scr_w - 300) / 2,
-            (scr_h - 120) / 2,
+            (scr_w - win_w) / 2,
+            (scr_h - win_h) / 2,
             0,
             0,
             SWP_NOZORDER | SWP_NOSIZE,
@@ -116,10 +122,10 @@ pub fn show(owner: HWND) -> HWND {
             w!("STATIC"),
             w!("Refreshing wallpaper..."),
             WS_CHILD | WS_VISIBLE,
-            12,
-            12,
-            276,
-            16,
+            s(12),
+            s(8),
+            s(336),
+            s(36),
             Some(dlg),
             None,
             Some(instance.into()),
@@ -132,10 +138,10 @@ pub fn show(owner: HWND) -> HWND {
             PROGRESS_CLASS,
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE,
-            12,
-            34,
-            276,
-            18,
+            s(12),
+            s(50),
+            s(336),
+            s(18),
             Some(dlg),
             None,
             Some(instance.into()),
@@ -149,10 +155,10 @@ pub fn show(owner: HWND) -> HWND {
             w!("BUTTON"),
             w!("OK"),
             WINDOW_STYLE(0) | WS_CHILD | WS_TABSTOP,
-            110,
-            58,
-            80,
-            24,
+            s(140),
+            s(76),
+            s(80),
+            s(24),
             Some(dlg),
             Some(HMENU(ID_BTN_OK as *mut _)),
             Some(instance.into()),
@@ -300,6 +306,12 @@ fn register_class_once() {
             hInstance: instance.into(),
             lpszClassName: class_name(),
             hIcon: crate::appicon::load(),
+            // Same reason as the settings dialog: a missing background brush
+            // leaves the client area unpainted and the static label draws on
+            // a mismatched COLOR_BTNFACE band.
+            hbrBackground: windows::Win32::Graphics::Gdi::GetSysColorBrush(
+                windows::Win32::Graphics::Gdi::COLOR_BTNFACE,
+            ),
             ..Default::default()
         };
         RegisterClassW(&wc);
