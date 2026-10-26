@@ -1,6 +1,6 @@
 [package]
 name = "wallboxd"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [[bin]]
@@ -15,7 +15,7 @@ futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 roxmltree = "0.20"
 regex = "1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security", "Win32_UI_HiDpi", "System_UserProfile", "Storage", "Storage_Streams", "Foundation", "Foundation_Collections", "Win32_Storage_Packaging_Appx", "ApplicationModel"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security", "Win32_UI_HiDpi", "System_UserProfile", "Storage", "Storage_Search", "Storage_Streams", "Foundation", "Foundation_Collections", "Win32_Storage_Packaging_Appx", "ApplicationModel"] }
 
 [build-dependencies]
 winresource = "0.1"

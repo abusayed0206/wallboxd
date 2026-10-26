@@ -88,8 +88,23 @@ impl Default for Config {
 }
 
 pub fn data_dir() -> PathBuf {
-    let base = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA not set");
-    PathBuf::from(base).join("Wallboxd")
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        // MSIX redirects %LOCALAPPDATA% writes into the package's LocalCache, which
+        // Explorer can't see through the virtual path: wallpaper went black. Use the
+        // real location (same files the redirect already wrote there).
+        if let Ok(cache) = windows::Storage::ApplicationData::Current()
+            .and_then(|a| a.LocalCacheFolder())
+            .and_then(|f| f.Path())
+        {
+            return PathBuf::from(cache.to_string())
+                .join("Local")
+                .join("Wallboxd");
+        }
+        let base = std::env::var("LOCALAPPDATA").expect("LOCALAPPDATA not set");
+        PathBuf::from(base).join("Wallboxd")
+    })
+    .clone()
 }
 
 fn config_path() -> PathBuf {

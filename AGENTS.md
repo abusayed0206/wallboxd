@@ -28,6 +28,7 @@ Windows-only Rust system-tray app, product name **Wallboxd** (crate/package name
 ## Runtime data
 
 - Everything lives in `%LOCALAPPDATA%\Wallboxd` (via `config::data_dir()`): `config.json`, `wallpaper.jpg`/`lockscreen.jpg` (cache), `Wallboxd.log`, plus transient `lockscreen_{timestamp}.jpg` files (see "Lock screen"). `LOCALAPPDATA` is required - the code `.expect()`s it.
+- **Packaged (MSIX/Store) build**: `data_dir()` returns the real `%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\Wallboxd` instead. MSIX silently redirects `%LOCALAPPDATA%` writes there, so passing the virtual path to `SPI_SETDESKWALLPAPER` hands Explorer (unpackaged) a file it can't see, and the desktop goes black. Don't "simplify" this back to the plain env var.
 
 ## Architecture
 
